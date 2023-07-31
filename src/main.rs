@@ -1,43 +1,70 @@
 #![deny(unsafe_code)]
-#![allow(clippy::empty_loop)]
+#![deny(warnings)]
 #![no_main]
 #![no_std]
 
-// Halt on panic
-use panic_halt as _; // panic handler
+use panic_halt as _;
 
-use cortex_m_rt::entry;
-use stm32f4xx_hal as hal;
+#[rtic::app(device = stm32f4xx_hal::pac, peripherals = true)]
+mod app {
+    use stm32f4xx_hal::{
+        gpio::{gpioa::PA6, gpioe::PE4, Edge, Input, Output, PushPull},
+        prelude::*,
+    };
+    const SYSFREQ: u32 = 100_000_000;
+    // Shared resources go here
+    #[shared]
+    struct Shared {}
 
-use crate::hal::{pac, prelude::*};
+    // Local resources go here
+    #[local]
+    struct Local {
+        button: PE4<Input>,
+        led: PA6<Output<PushPull>>,
+    }
 
-#[entry]
-fn main() -> ! {
-    if let (Some(dp), Some(_cp)) = (
-        pac::Peripherals::take(),
-        cortex_m::peripheral::Peripherals::take(),
-    ) {
-        // Set up the LED. On the Mini-F4 it's connected to pin PC13.
-        let gpioc = dp.GPIOA.split();
-        let mut led = gpioc.pa6.into_push_pull_output();
+    #[init]
+    fn init(mut ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+        // syscfg
+        let mut syscfg = ctx.device.SYSCFG.constrain();
+        // clocks
+        let rcc = ctx.device.RCC.constrain();
+        let _clocks = rcc.cfgr.sysclk(SYSFREQ.Hz()).use_hse(25.MHz()).freeze();
+        // gpio ports A and C
+        let gpioe = ctx.device.GPIOE.split();
+        let gpioa = ctx.device.GPIOA.split();
+        // button
+        let mut button = gpioe.pe4.into_pull_up_input();
+        button.make_interrupt_source(&mut syscfg);
+        button.enable_interrupt(&mut ctx.device.EXTI);
+        button.trigger_on_edge(&mut ctx.device.EXTI, Edge::Falling);
+        // led
+        let led = gpioa.pa6.into_push_pull_output();
 
-        // Set up the system clock. We want to run at 48MHz for this one.
-        let rcc = dp.RCC.constrain();
-        let clocks = rcc.cfgr.use_hse(25.MHz()).sysclk(48.MHz()).freeze();
+        (
+            Shared {
+               // Initialization of shared resources go here
+            },
+            Local {
+                // Initialization of local resources go here
+                button,
+                led,
+            },
+            init::Monotonics(),
+        )
+    }
 
-        // Create a delay abstraction based on general-pupose 32-bit timer TIM5
-        let mut delay = dp.TIM5.delay_us(&clocks);
-
+    // Optional idle, can be removed if not needed.
+    #[idle]
+    fn idle(_: idle::Context) -> ! {
         loop {
-            // On for 1s, off for 3s.
-            led.set_high();
-            // Use `embedded_hal::DelayMs` trait
-            delay.delay(1.secs());
-            led.set_low();
-            // or use `fugit::ExtU32` trait
-            delay.delay(1.secs());
+            continue;
         }
     }
 
-    loop {}
+    #[task(binds = EXTI0, local = [button, led])]
+    fn button_click(ctx: button_click::Context) {
+        ctx.local.button.clear_interrupt_pending_bit();
+        ctx.local.led.toggle();
+    }
 }
