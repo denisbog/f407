@@ -1,13 +1,12 @@
 #![no_main]
 #![no_std]
 
-use panic_halt as _;
-
-#[rtic::app(device = stm32f4xx_hal::pac,  peripherals = true)]
+use panic_rtt_core as _;
+#[rtic::app(device = stm32f4xx_hal::pac)]
 mod app {
-    use cortex_m::singleton;
+    use embedded_graphics::prelude::*;
+    use rtt_target::rprintln;
     use stm32f4xx_hal::{
-        dma::{config::DmaConfig, StreamsTuple},
         prelude::*,
         spi::{NoMiso, Spi},
     };
@@ -20,6 +19,8 @@ mod app {
 
     #[init]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+        rtt_target::rtt_init_print!();
+        rprintln!("start");
         let dp = ctx.device;
 
         let rcc = dp.RCC.constrain();
@@ -30,17 +31,13 @@ mod app {
         let mut led = gpioa.pa6.into_push_pull_output();
         led.set_low();
 
-        let clk = gpioa
-            .pa5
-            .into_alternate()
-            .speed(stm32f4xx_hal::gpio::Speed::VeryHigh)
-            .internal_pull_up(true);
+        let clk = gpioa.pa5.into_alternate();
 
-        let mosi = gpioa
-            .pa7
-            .into_alternate()
-            .speed(stm32f4xx_hal::gpio::Speed::VeryHigh);
+        let mosi = gpioa.pa7.into_alternate().internal_pull_up(true);
 
+        let dc = gpioa.pa1.into_push_pull_output();
+        let reset = gpioa.pa2.into_push_pull_output();
+        let cs = gpioa.pa3.into_push_pull_output();
         let spi = Spi::new(
             dp.SPI1,
             (clk, NoMiso::new(), mosi),
@@ -49,32 +46,37 @@ mod app {
             &clocks,
         );
 
-        let tx = spi.use_dma().tx();
-        let streams = StreamsTuple::new(dp.DMA2);
-        let stream = streams.3;
+        let mut delay = dp.TIM1.delay_us(&clocks);
 
-        let buf = singleton!(: [u8; 100] = [1;100]).unwrap();
+        rprintln!("create display");
+        let mut lcd = ili9341::Ili9341::new(
+            display_interface_spi::SPIInterface::new(spi, dc, cs),
+            reset,
+            &mut delay,
+            ili9341::Orientation::Portrait,
+            ili9341::DisplaySize240x320,
+        )
+        .unwrap();
 
-        for (i, b) in buf.iter_mut().enumerate() {
-            *b = i as u8;
-        }
+        rprintln!("clear display");
+        lcd.clear(embedded_graphics_core::pixelcolor::Rgb565::BLUE)
+            .unwrap();
 
-        let mut transfer = stm32f4xx_hal::dma::Transfer::init_memory_to_peripheral(
-            stream,
-            tx,
-            buf,
-            None,
-            DmaConfig::default()
-                .memory_increment(true)
-                .fifo_enable(true)
-                .fifo_error_interrupt(true)
-                .transfer_complete_interrupt(true),
+        let style = embedded_graphics::mono_font::MonoTextStyle::new(
+            &embedded_graphics::mono_font::ascii::FONT_6X10,
+            <embedded_graphics::pixelcolor::Rgb565 as embedded_graphics::prelude::RgbColor>::RED,
         );
-
-        transfer.start(|_tx| {
-            led.set_high();
-        });
-
+        rprintln!("print string");
+        embedded_graphics::text::Text::with_alignment(
+            "some\ntext",
+            embedded_graphics::prelude::Point::new(20, 30),
+            style,
+            embedded_graphics::text::Alignment::Center,
+        )
+        .draw(&mut lcd)
+        .unwrap();
+        led.set_high();
+        rprintln!("done");
         (Shared {}, Local {}, init::Monotonics())
     }
 
