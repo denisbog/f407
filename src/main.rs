@@ -4,12 +4,9 @@
 use panic_rtt_core as _;
 #[rtic::app(device = stm32f4xx_hal::pac)]
 mod app {
-    use embedded_graphics::prelude::*;
+    use lcd_ili9341::PixelFormat;
     use rtt_target::rprintln;
-    use stm32f4xx_hal::{
-        prelude::*,
-        spi::{NoMiso, Spi},
-    };
+    use stm32f4xx_hal::prelude::*;
 
     #[shared]
     struct Shared {}
@@ -24,57 +21,58 @@ mod app {
         let dp = ctx.device;
 
         let rcc = dp.RCC.constrain();
-        let clocks = rcc.cfgr.use_hse(25.MHz()).sysclk(80.MHz()).freeze();
-
+        let clocks = rcc.cfgr.use_hse(25.MHz()).sysclk(100.MHz()).freeze();
         let gpioa = dp.GPIOA.split();
-
-        let mut led = gpioa.pa6.into_push_pull_output();
-        led.set_low();
-
-        let clk = gpioa.pa5.into_alternate();
-
-        let mosi = gpioa.pa7.into_alternate().internal_pull_up(true);
-
-        let dc = gpioa.pa1.into_push_pull_output();
-        let reset = gpioa.pa2.into_push_pull_output();
-        let cs = gpioa.pa3.into_push_pull_output();
-        let spi = Spi::new(
-            dp.SPI1,
-            (clk, NoMiso::new(), mosi),
-            embedded_hal::spi::MODE_0,
-            3.MHz(),
-            &clocks,
-        );
+        let gpiob = dp.GPIOB.split();
+        let gpiod = dp.GPIOD.split();
+        let gpioe = dp.GPIOE.split();
+        let lcd = f407::LCD {
+            csx: gpiob.pb12.into_push_pull_output(),
+            dcx: gpiod.pd7.into_push_pull_output(),
+            wrx: gpiod.pd4.into_push_pull_output(),
+            rdx: gpiod.pd5.into_push_pull_output(),
+            d0: gpiod.pd14.into_push_pull_output(),
+            d1: gpiod.pd15.into_push_pull_output(),
+            d2: gpiod.pd0.into_push_pull_output(),
+            d3: gpiod.pd1.into_push_pull_output(),
+            d4: gpioe.pe7.into_push_pull_output(),
+            d5: gpioe.pe8.into_push_pull_output(),
+            d6: gpioe.pe9.into_push_pull_output(),
+            d7: gpioe.pe10.into_push_pull_output(),
+            d8: gpioe.pe11.into_push_pull_output(),
+            d9: gpioe.pe12.into_push_pull_output(),
+            d10: gpioe.pe13.into_push_pull_output(),
+            d11: gpioe.pe14.into_push_pull_output(),
+            d12: gpioe.pe15.into_push_pull_output(),
+            d13: gpiod.pd8.into_push_pull_output(),
+            d14: gpiod.pd9.into_push_pull_output(),
+            d15: gpiod.pd10.into_push_pull_output(),
+            resx: gpioe.pe3.into_push_pull_output(),
+        };
 
         let mut delay = dp.TIM1.delay_us(&clocks);
+        let mut controller = lcd_ili9341::Controller::new(lcd);
+        // //reset start
+        // delay.delay(1.millis());
+        // //reset end
 
-        rprintln!("create display");
-        let mut lcd = ili9341::Ili9341::new(
-            display_interface_spi::SPIInterface::new(spi, dc, cs),
-            reset,
-            &mut delay,
-            ili9341::Orientation::Portrait,
-            ili9341::DisplaySize240x320,
-        )
-        .unwrap();
-
-        rprintln!("clear display");
-        lcd.clear(embedded_graphics_core::pixelcolor::Rgb565::BLUE)
-            .unwrap();
-
-        let style = embedded_graphics::mono_font::MonoTextStyle::new(
-            &embedded_graphics::mono_font::ascii::FONT_6X10,
-            <embedded_graphics::pixelcolor::Rgb565 as embedded_graphics::prelude::RgbColor>::RED,
-        );
-        rprintln!("print string");
-        embedded_graphics::text::Text::with_alignment(
-            "some\ntext",
-            embedded_graphics::prelude::Point::new(20, 30),
-            style,
-            embedded_graphics::text::Alignment::Center,
-        )
-        .draw(&mut lcd)
-        .unwrap();
+        delay.delay(5.millis());
+        controller.software_reset();
+        delay.delay(120.millis());
+        controller.pixel_format_set(PixelFormat::default());
+        delay.delay(5.millis());
+        controller.sleep_out();
+        delay.delay(5.millis());
+        controller.column_address_set(0u16, 10u16);
+        delay.delay(5.millis());
+        controller.page_address_set(0u16, 10u16);
+        delay.delay(5.millis());
+        controller.memory_write_start();
+        delay.delay(5.millis());
+        controller.write_memory(core::iter::repeat(0u32).take(100));
+        delay.delay(5.millis());
+        let mut led = gpioa.pa6.into_push_pull_output();
+        led.set_low();
         led.set_high();
         rprintln!("done");
         (Shared {}, Local {}, init::Monotonics())
