@@ -6,7 +6,7 @@ use panic_rtt_core as _;
 mod app {
     use lcd_ili9341::PixelFormat;
     use rtt_target::rprintln;
-    use stm32f4xx_hal::prelude::*;
+    use stm32f4xx_hal::{prelude::*, timer::Delay};
 
     #[shared]
     struct Shared {}
@@ -21,16 +21,20 @@ mod app {
         let dp = ctx.device;
 
         let rcc = dp.RCC.constrain();
-        let clocks = rcc.cfgr.use_hse(25.MHz()).sysclk(100.MHz()).freeze();
+        let clocks = rcc
+            .cfgr
+            //.use_hse(25.MHz()).sysclk(100.MHz())
+            .freeze();
         let gpioa = dp.GPIOA.split();
         let gpiob = dp.GPIOB.split();
         let gpiod = dp.GPIOD.split();
         let gpioe = dp.GPIOE.split();
+        let mut delay = dp.TIM1.delay_us(&clocks);
         let lcd = f407::LCD {
-            csx: gpiob.pb12.into_push_pull_output(),
-            dcx: gpiod.pd7.into_push_pull_output(),
-            wrx: gpiod.pd4.into_push_pull_output(),
-            rdx: gpiod.pd5.into_push_pull_output(),
+            csx: gpiob.pb12.into_push_pull_output().internal_pull_up(true),
+            dcx: gpiod.pd7.into_push_pull_output().internal_pull_up(true),
+            wrx: gpiod.pd4.into_push_pull_output().internal_pull_up(true),
+            rdx: gpiod.pd5.into_push_pull_output().internal_pull_up(true),
             d0: gpiod.pd14.into_push_pull_output(),
             d1: gpiod.pd15.into_push_pull_output(),
             d2: gpiod.pd0.into_push_pull_output(),
@@ -47,33 +51,33 @@ mod app {
             d13: gpiod.pd8.into_push_pull_output(),
             d14: gpiod.pd9.into_push_pull_output(),
             d15: gpiod.pd10.into_push_pull_output(),
-            resx: gpioe.pe3.into_push_pull_output(),
+            resx: gpioe.pe3.into_push_pull_output().internal_pull_down(true),
         };
 
-        let mut delay = dp.TIM1.delay_us(&clocks);
         let mut controller = lcd_ili9341::Controller::new(lcd);
         // //reset start
         // delay.delay(1.millis());
         // //reset end
 
-        delay.delay(5.millis());
-        controller.software_reset();
-        delay.delay(120.millis());
-        controller.pixel_format_set(PixelFormat::default());
-        delay.delay(5.millis());
-        controller.sleep_out();
-        delay.delay(5.millis());
-        controller.column_address_set(0u16, 10u16);
-        delay.delay(5.millis());
-        controller.page_address_set(0u16, 10u16);
-        delay.delay(5.millis());
-        controller.memory_write_start();
-        delay.delay(5.millis());
-        controller.write_memory(core::iter::repeat(0u32).take(100));
-        delay.delay(5.millis());
         let mut led = gpioa.pa6.into_push_pull_output();
-        led.set_low();
         led.set_high();
+
+        // delay.delay(5.millis());
+        // controller.software_reset();
+        // delay.delay(120.millis());
+        // controller.pixel_format_set(PixelFormat::bit16());
+        // delay.delay(5.millis());
+        // controller.sleep_out();
+        // delay.delay(5.millis());
+        // controller.column_address_set(0u16, 10u16);
+        // delay.delay(5.millis());
+        // controller.page_address_set(0u16, 10u16);
+        // delay.delay(5.millis());
+        controller.memory_write_start();
+        // delay.delay(5.millis());
+        controller.write_memory(core::iter::repeat(0xffff).take(4));
+        // delay.delay(5.millis());
+        led.set_low();
         rprintln!("done");
         (Shared {}, Local {}, init::Monotonics())
     }

@@ -4,6 +4,7 @@ use core::convert::Infallible;
 
 use embedded_hal::digital::v2::OutputPin;
 use lcd_ili9341::Interface;
+use rtt_target::rprintln;
 
 pub trait Pins {
     type CSX: OutputPin<Error = Infallible>;
@@ -124,8 +125,9 @@ impl<
 {
     fn write_parameters(&mut self, command: u8, data: &[u8]) {
         self.csx.set_low().unwrap();
-        self.wrx.set_low().unwrap();
+        self.rdx.set_high().unwrap();
         self.dcx.set_low().unwrap();
+        rprintln!("writing {}", command);
         set_bit(command, 1, &mut self.d0);
         set_bit(command, 1 << 1, &mut self.d1);
         set_bit(command, 1 << 2, &mut self.d2);
@@ -134,13 +136,15 @@ impl<
         set_bit(command, 1 << 5, &mut self.d5);
         set_bit(command, 1 << 6, &mut self.d6);
         set_bit(command, 1 << 7, &mut self.d7);
-        self.wrx.set_high().unwrap();
+        // self.wrx.set_low().unwrap();
+        // self.wrx.set_high().unwrap();
+
         self.dcx.set_high().unwrap();
 
         if !data.is_empty() {
             data.iter().enumerate().for_each(|(index, &data)| {
                 if index % 2 == 0 {
-                    self.wrx.set_low().unwrap();
+                    rprintln!("write first");
                     set_bit(data, 1, &mut self.d0);
                     set_bit(data, 1 << 1, &mut self.d1);
                     set_bit(data, 1 << 2, &mut self.d2);
@@ -150,6 +154,7 @@ impl<
                     set_bit(data, 1 << 6, &mut self.d6);
                     set_bit(data, 1 << 7, &mut self.d7);
                 } else {
+                    rprintln!("write last");
                     set_bit(data, 1, &mut self.d8);
                     set_bit(data, 1 << 1, &mut self.d9);
                     set_bit(data, 1 << 2, &mut self.d10);
@@ -158,15 +163,17 @@ impl<
                     set_bit(data, 1 << 5, &mut self.d13);
                     set_bit(data, 1 << 6, &mut self.d14);
                     set_bit(data, 1 << 7, &mut self.d15);
-                    self.wrx.set_high().unwrap();
+                    // self.wrx.set_low().unwrap();
+                    // self.wrx.set_high().unwrap();
                 }
             });
         }
-        if data.len() % 2 == 0 {
-            self.wrx.set_high().unwrap();
+        if data.len() % 2 == 1 {
+            // self.wrx.set_low().unwrap();
+            // self.wrx.set_high().unwrap();
         }
-
-        self.csx.set_low().unwrap();
+        self.rdx.set_low().unwrap();
+        self.csx.set_high().unwrap();
     }
 
     fn write_memory<I>(&mut self, iterable: I)
@@ -174,9 +181,10 @@ impl<
         I: IntoIterator<Item = u32>,
     {
         self.csx.set_low().unwrap();
+        self.rdx.set_high().unwrap();
+        self.dcx.set_high().unwrap();
         iterable.into_iter().for_each(|data| {
             let temp = data as u16;
-            self.wrx.set_low().unwrap();
             set_16_bit(temp, 1, &mut self.d0);
             set_16_bit(temp, 1 << 1, &mut self.d1);
             set_16_bit(temp, 1 << 2, &mut self.d2);
@@ -193,9 +201,11 @@ impl<
             set_16_bit(temp, 1 << 13, &mut self.d13);
             set_16_bit(temp, 1 << 14, &mut self.d14);
             set_16_bit(temp, 1 << 15, &mut self.d15);
-            self.wrx.set_high().unwrap();
+            rprintln!("write half");
+            // self.wrx.set_low().unwrap();
+            // self.wrx.set_high().unwrap();
+
             let temp = (data >> 16) as u16;
-            self.wrx.set_low().unwrap();
             set_16_bit(temp, 1, &mut self.d0);
             set_16_bit(temp, 1 << 1, &mut self.d1);
             set_16_bit(temp, 1 << 2, &mut self.d2);
@@ -212,8 +222,11 @@ impl<
             set_16_bit(temp, 1 << 13, &mut self.d13);
             set_16_bit(temp, 1 << 14, &mut self.d14);
             set_16_bit(temp, 1 << 15, &mut self.d15);
-            self.wrx.set_high().unwrap();
+            rprintln!("write half");
+            // self.wrx.set_low().unwrap();
+            // self.wrx.set_high().unwrap();
         });
+        self.dcx.set_low().unwrap();
         self.csx.set_high().unwrap();
     }
 
@@ -223,9 +236,12 @@ impl<
 }
 
 fn set_bit<P: OutputPin<Error = Infallible>>(command: u8, mask: u8, pin: &mut P) {
+    rprintln!("mask {}", command & mask);
     if command & mask > 0 {
+        rprintln!("set high");
         pin.set_high().unwrap();
     } else {
+        rprintln!("set low");
         pin.set_low().unwrap();
     }
 }
