@@ -5,32 +5,13 @@ use core::convert::Infallible;
 use embedded_hal::digital::v2::OutputPin;
 use lcd_ili9341::Interface;
 use rtt_target::rprintln;
-
-pub trait Pins {
-    type CSX: OutputPin<Error = Infallible>;
-    type RESX: OutputPin<Error = Infallible>;
-    type DCX: OutputPin<Error = Infallible>;
-    type WRX: OutputPin<Error = Infallible>;
-    type RDX: OutputPin<Error = Infallible>;
-    type D0: OutputPin<Error = Infallible>;
-    type D1: OutputPin<Error = Infallible>;
-    type D2: OutputPin<Error = Infallible>;
-    type D3: OutputPin<Error = Infallible>;
-    type D4: OutputPin<Error = Infallible>;
-    type D5: OutputPin<Error = Infallible>;
-    type D6: OutputPin<Error = Infallible>;
-    type D7: OutputPin<Error = Infallible>;
-    type D8: OutputPin<Error = Infallible>;
-    type D9: OutputPin<Error = Infallible>;
-    type D10: OutputPin<Error = Infallible>;
-    type D11: OutputPin<Error = Infallible>;
-    type D12: OutputPin<Error = Infallible>;
-    type D13: OutputPin<Error = Infallible>;
-    type D14: OutputPin<Error = Infallible>;
-    type D15: OutputPin<Error = Infallible>;
-}
+use stm32f4xx_hal::{
+    prelude::*,
+    timer::{Delay, Instance},
+};
 
 pub struct LCD<
+    'a,
     CSX,
     RESX,
     DCX,
@@ -52,6 +33,7 @@ pub struct LCD<
     D13,
     D14,
     D15,
+    T,
 > {
     pub csx: CSX,
     pub resx: RESX,
@@ -74,9 +56,11 @@ pub struct LCD<
     pub d13: D13,
     pub d14: D14,
     pub d15: D15,
+    pub delay: &'a mut Delay<T, 1000000>,
 }
 
 impl<
+        'a,
         CSX: OutputPin<Error = Infallible>,
         RESX: OutputPin<Error = Infallible>,
         DCX: OutputPin<Error = Infallible>,
@@ -98,8 +82,10 @@ impl<
         D13: OutputPin<Error = Infallible>,
         D14: OutputPin<Error = Infallible>,
         D15: OutputPin<Error = Infallible>,
-    > Interface
-    for LCD<
+        T: Instance,
+    >
+    LCD<
+        'a,
         CSX,
         RESX,
         DCX,
@@ -121,6 +107,72 @@ impl<
         D13,
         D14,
         D15,
+        T,
+    >
+{
+    fn write(&mut self) {
+        self.wrx.set_low().unwrap();
+        self.delay.delay(15.nanos());
+        self.wrx.set_high().unwrap();
+        self.delay.delay(10.nanos());
+    }
+    pub fn reset(&mut self) {
+        self.delay.delay(300.nanos());
+        self.resx.set_low().unwrap();
+        self.delay.delay(300.nanos());
+        self.resx.set_high().unwrap();
+        self.delay.delay(300.nanos());
+    }
+}
+impl<
+        'a,
+        CSX: OutputPin<Error = Infallible>,
+        RESX: OutputPin<Error = Infallible>,
+        DCX: OutputPin<Error = Infallible>,
+        WRX: OutputPin<Error = Infallible>,
+        RDX: OutputPin<Error = Infallible>,
+        D0: OutputPin<Error = Infallible>,
+        D1: OutputPin<Error = Infallible>,
+        D2: OutputPin<Error = Infallible>,
+        D3: OutputPin<Error = Infallible>,
+        D4: OutputPin<Error = Infallible>,
+        D5: OutputPin<Error = Infallible>,
+        D6: OutputPin<Error = Infallible>,
+        D7: OutputPin<Error = Infallible>,
+        D8: OutputPin<Error = Infallible>,
+        D9: OutputPin<Error = Infallible>,
+        D10: OutputPin<Error = Infallible>,
+        D11: OutputPin<Error = Infallible>,
+        D12: OutputPin<Error = Infallible>,
+        D13: OutputPin<Error = Infallible>,
+        D14: OutputPin<Error = Infallible>,
+        D15: OutputPin<Error = Infallible>,
+        T: Instance,
+    > Interface
+    for LCD<
+        'a,
+        CSX,
+        RESX,
+        DCX,
+        WRX,
+        RDX,
+        D0,
+        D1,
+        D2,
+        D3,
+        D4,
+        D5,
+        D6,
+        D7,
+        D8,
+        D9,
+        D10,
+        D11,
+        D12,
+        D13,
+        D14,
+        D15,
+        T,
     >
 {
     fn write_parameters(&mut self, command: u8, data: &[u8]) {
@@ -136,8 +188,7 @@ impl<
         set_bit(command, 1 << 5, &mut self.d5);
         set_bit(command, 1 << 6, &mut self.d6);
         set_bit(command, 1 << 7, &mut self.d7);
-        // self.wrx.set_low().unwrap();
-        // self.wrx.set_high().unwrap();
+        self.write();
 
         self.dcx.set_high().unwrap();
 
@@ -163,14 +214,12 @@ impl<
                     set_bit(data, 1 << 5, &mut self.d13);
                     set_bit(data, 1 << 6, &mut self.d14);
                     set_bit(data, 1 << 7, &mut self.d15);
-                    // self.wrx.set_low().unwrap();
-                    // self.wrx.set_high().unwrap();
+                    self.write();
                 }
             });
         }
         if data.len() % 2 == 1 {
-            // self.wrx.set_low().unwrap();
-            // self.wrx.set_high().unwrap();
+            self.write();
         }
         self.rdx.set_low().unwrap();
         self.csx.set_high().unwrap();
@@ -182,7 +231,6 @@ impl<
     {
         self.csx.set_low().unwrap();
         self.rdx.set_high().unwrap();
-        self.dcx.set_high().unwrap();
         iterable.into_iter().for_each(|data| {
             let temp = data as u16;
             set_16_bit(temp, 1, &mut self.d0);
@@ -201,10 +249,7 @@ impl<
             set_16_bit(temp, 1 << 13, &mut self.d13);
             set_16_bit(temp, 1 << 14, &mut self.d14);
             set_16_bit(temp, 1 << 15, &mut self.d15);
-            rprintln!("write half");
-            // self.wrx.set_low().unwrap();
-            // self.wrx.set_high().unwrap();
-
+            self.write();
             let temp = (data >> 16) as u16;
             set_16_bit(temp, 1, &mut self.d0);
             set_16_bit(temp, 1 << 1, &mut self.d1);
@@ -222,9 +267,7 @@ impl<
             set_16_bit(temp, 1 << 13, &mut self.d13);
             set_16_bit(temp, 1 << 14, &mut self.d14);
             set_16_bit(temp, 1 << 15, &mut self.d15);
-            rprintln!("write half");
-            // self.wrx.set_low().unwrap();
-            // self.wrx.set_high().unwrap();
+            self.write();
         });
         self.dcx.set_low().unwrap();
         self.csx.set_high().unwrap();
