@@ -21,7 +21,10 @@ mod app {
         let dp = ctx.device;
 
         let rcc = dp.RCC.constrain();
-        let clocks = rcc.cfgr.use_hse(8.MHz()).sysclk(8.MHz()).freeze();
+        let clocks = rcc
+            .cfgr
+            //.use_hse(8.MHz()).sysclk(8.MHz())
+            .freeze();
         let gpioa = dp.GPIOA.split();
         let gpiob = dp.GPIOB.split();
         let gpiod = dp.GPIOD.split();
@@ -57,11 +60,10 @@ mod app {
         // //reset start
         let mut reset = gpioe.pe3.into_push_pull_output();
 
-        delay.delay(300.nanos());
         reset.set_low();
         delay.delay(10.micros());
         reset.set_high();
-        delay.delay(300.nanos());
+        delay.delay(5.millis());
         // //reset end
 
         let mut led = gpioa.pa6.into_push_pull_output();
@@ -89,14 +91,14 @@ mod app {
         delay.delay(5.millis());
         controller.sleep_out();
         delay.delay(5.millis());
-        controller.column_address_set(0u16, 0u16);
+        controller.column_address_set(0x0000u16, 0x0900u16);
         delay.delay(5.millis());
-        controller.page_address_set(0u16, 0u16);
+        controller.page_address_set(0x0000u16, 0x0009u16);
 
         delay.delay(5.millis());
         controller.memory_write_start();
         delay.delay(5.millis());
-        controller.write_memory(core::iter::repeat(0b0000000000011111).take(240 * 160));
+        controller.write_memory(core::iter::repeat(0b1111100000000000).take(240 * 5));
         delay.delay(5.millis());
         led.set_low();
         rprintln!("done");

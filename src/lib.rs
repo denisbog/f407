@@ -195,7 +195,6 @@ impl<
         if !data.is_empty() {
             data.iter().enumerate().for_each(|(index, &data)| {
                 if index % 2 == 0 {
-                    rprintln!("write first");
                     set_bit(data, 1, &mut self.d0);
                     set_bit(data, 1 << 1, &mut self.d1);
                     set_bit(data, 1 << 2, &mut self.d2);
@@ -205,7 +204,6 @@ impl<
                     set_bit(data, 1 << 6, &mut self.d6);
                     set_bit(data, 1 << 7, &mut self.d7);
                 } else {
-                    rprintln!("write last");
                     set_bit(data, 1, &mut self.d8);
                     set_bit(data, 1 << 1, &mut self.d9);
                     set_bit(data, 1 << 2, &mut self.d10);
@@ -227,46 +225,28 @@ impl<
 
     fn write_memory<I>(&mut self, iterable: I)
     where
-        I: IntoIterator<Item = u32>,
+        I: IntoIterator<Item = u16>,
     {
         self.csx.set_low().unwrap();
         self.rdx.set_high().unwrap();
         iterable.into_iter().for_each(|data| {
             let temp = data as u16;
-            set_16_bit(temp, 1, &mut self.d0);
-            set_16_bit(temp, 1 << 1, &mut self.d1);
-            set_16_bit(temp, 1 << 2, &mut self.d2);
-            set_16_bit(temp, 1 << 3, &mut self.d3);
-            set_16_bit(temp, 1 << 4, &mut self.d4);
+            set_16_bit(temp, 1, &mut self.d11);
+            set_16_bit(temp, 1 << 1, &mut self.d12);
+            set_16_bit(temp, 1 << 2, &mut self.d13);
+            set_16_bit(temp, 1 << 3, &mut self.d14);
+            set_16_bit(temp, 1 << 4, &mut self.d15);
             set_16_bit(temp, 1 << 5, &mut self.d5);
             set_16_bit(temp, 1 << 6, &mut self.d6);
             set_16_bit(temp, 1 << 7, &mut self.d7);
             set_16_bit(temp, 1 << 8, &mut self.d8);
             set_16_bit(temp, 1 << 9, &mut self.d9);
             set_16_bit(temp, 1 << 10, &mut self.d10);
-            set_16_bit(temp, 1 << 11, &mut self.d11);
-            set_16_bit(temp, 1 << 12, &mut self.d12);
-            set_16_bit(temp, 1 << 13, &mut self.d13);
-            set_16_bit(temp, 1 << 14, &mut self.d14);
-            set_16_bit(temp, 1 << 15, &mut self.d15);
-            self.write();
-            let temp = (data >> 16) as u16;
-            set_16_bit(temp, 1, &mut self.d0);
-            set_16_bit(temp, 1 << 1, &mut self.d1);
-            set_16_bit(temp, 1 << 2, &mut self.d2);
-            set_16_bit(temp, 1 << 3, &mut self.d3);
-            set_16_bit(temp, 1 << 4, &mut self.d4);
-            set_16_bit(temp, 1 << 5, &mut self.d5);
-            set_16_bit(temp, 1 << 6, &mut self.d6);
-            set_16_bit(temp, 1 << 7, &mut self.d7);
-            set_16_bit(temp, 1 << 8, &mut self.d8);
-            set_16_bit(temp, 1 << 9, &mut self.d9);
-            set_16_bit(temp, 1 << 10, &mut self.d10);
-            set_16_bit(temp, 1 << 11, &mut self.d11);
-            set_16_bit(temp, 1 << 12, &mut self.d12);
-            set_16_bit(temp, 1 << 13, &mut self.d13);
-            set_16_bit(temp, 1 << 14, &mut self.d14);
-            set_16_bit(temp, 1 << 15, &mut self.d15);
+            set_16_bit(temp, 1 << 11, &mut self.d0);
+            set_16_bit(temp, 1 << 12, &mut self.d1);
+            set_16_bit(temp, 1 << 13, &mut self.d2);
+            set_16_bit(temp, 1 << 14, &mut self.d3);
+            set_16_bit(temp, 1 << 15, &mut self.d4);
             self.write();
         });
         self.dcx.set_low().unwrap();
