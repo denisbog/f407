@@ -2,10 +2,9 @@
 
 use core::convert::Infallible;
 
-use embedded_hal::digital::v2::OutputPin;
 use lcd_ili9341::Interface;
-use rtt_target::rprintln;
 use stm32f4xx_hal::{
+    hal::digital::OutputPin,
     prelude::*,
     timer::{Delay, Instance},
 };
@@ -179,7 +178,6 @@ impl<
         self.csx.set_low().unwrap();
         self.rdx.set_high().unwrap();
         self.dcx.set_low().unwrap();
-        rprintln!("writing {}", command);
         set_bit(command, 1, &mut self.d0);
         set_bit(command, 1 << 1, &mut self.d1);
         set_bit(command, 1 << 2, &mut self.d2);
@@ -259,12 +257,9 @@ impl<
 }
 
 fn set_bit<P: OutputPin<Error = Infallible>>(command: u8, mask: u8, pin: &mut P) {
-    rprintln!("mask {}", command & mask);
     if command & mask > 0 {
-        rprintln!("set high");
         pin.set_high().unwrap();
     } else {
-        rprintln!("set low");
         pin.set_low().unwrap();
     }
 }
