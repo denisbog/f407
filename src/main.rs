@@ -1,6 +1,9 @@
 #![no_main]
 #![no_std]
 
+use core::u16;
+
+use cortex_m::asm::delay;
 use defmt_rtt as _;
 use lcd_ili9341::PixelFormat;
 use panic_halt as _;
@@ -88,14 +91,11 @@ fn main() -> ! {
 
     controller.pixel_format_set(PixelFormat::bit16());
     controller.sleep_out();
-    controller.column_address_set(0, 0);
-    controller.page_address_set(0, 0);
+    controller.column_address_set(10, 235);
 
-    controller.memory_write_start();
-    controller.write_memory(core::iter::repeat(0b1111110000000000).take(240 * 320));
+    controller.page_address_set(2000, 65535 - 1);
+    let pixels = 240 * 320;
 
-    controller.memory_write_start();
-    controller.write_memory(core::iter::repeat(0b0011110000000000).take(240 * 320));
     delay.delay_ms(50);
     led.set_low();
     delay.delay_ms(50);
@@ -104,6 +104,23 @@ fn main() -> ! {
     led.set_low();
 
     defmt::println!("done");
+
+    defmt::println!("check {}", 0b1111100000000000 & (1));
     // rprintln!("done");
-    loop {}
+    loop {
+        controller.memory_write_start();
+        controller.write_memory(core::iter::repeat(0b0000100000000000).take(pixels));
+
+        delay.delay_ms(4000);
+
+        controller.memory_write_start();
+        controller.write_memory(core::iter::repeat(0b0000000001100000).take(pixels));
+
+        delay.delay_ms(4000);
+
+        controller.memory_write_start();
+        controller.write_memory(core::iter::repeat(0b0000000000011111).take(pixels));
+
+        delay.delay_ms(4000);
+    }
 }

@@ -191,31 +191,17 @@ impl<
         self.dcx.set_high().unwrap();
 
         if !data.is_empty() {
-            data.iter().enumerate().for_each(|(index, &data)| {
-                if index % 2 == 0 {
-                    set_bit(data, 1, &mut self.d0);
-                    set_bit(data, 1 << 1, &mut self.d1);
-                    set_bit(data, 1 << 2, &mut self.d2);
-                    set_bit(data, 1 << 3, &mut self.d3);
-                    set_bit(data, 1 << 4, &mut self.d4);
-                    set_bit(data, 1 << 5, &mut self.d5);
-                    set_bit(data, 1 << 6, &mut self.d6);
-                    set_bit(data, 1 << 7, &mut self.d7);
-                } else {
-                    set_bit(data, 1, &mut self.d8);
-                    set_bit(data, 1 << 1, &mut self.d9);
-                    set_bit(data, 1 << 2, &mut self.d10);
-                    set_bit(data, 1 << 3, &mut self.d11);
-                    set_bit(data, 1 << 4, &mut self.d12);
-                    set_bit(data, 1 << 5, &mut self.d13);
-                    set_bit(data, 1 << 6, &mut self.d14);
-                    set_bit(data, 1 << 7, &mut self.d15);
-                    self.write();
-                }
+            data.iter().for_each(|&data| {
+                set_bit(data, 1, &mut self.d0);
+                set_bit(data, 1 << 1, &mut self.d1);
+                set_bit(data, 1 << 2, &mut self.d2);
+                set_bit(data, 1 << 3, &mut self.d3);
+                set_bit(data, 1 << 4, &mut self.d4);
+                set_bit(data, 1 << 5, &mut self.d5);
+                set_bit(data, 1 << 6, &mut self.d6);
+                set_bit(data, 1 << 7, &mut self.d7);
+                self.write();
             });
-        }
-        if data.len() % 2 == 1 {
-            self.write();
         }
         self.rdx.set_low().unwrap();
         self.csx.set_high().unwrap();
@@ -229,22 +215,22 @@ impl<
         self.rdx.set_high().unwrap();
         iterable.into_iter().for_each(|data| {
             let temp = data as u16;
-            set_16_bit(temp, 1, &mut self.d11);
-            set_16_bit(temp, 1 << 1, &mut self.d12);
-            set_16_bit(temp, 1 << 2, &mut self.d13);
-            set_16_bit(temp, 1 << 3, &mut self.d14);
-            set_16_bit(temp, 1 << 4, &mut self.d15);
+            set_16_bit(temp, 1, &mut self.d0);
+            set_16_bit(temp, 1 << 1, &mut self.d1);
+            set_16_bit(temp, 1 << 2, &mut self.d2);
+            set_16_bit(temp, 1 << 3, &mut self.d3);
+            set_16_bit(temp, 1 << 4, &mut self.d4);
             set_16_bit(temp, 1 << 5, &mut self.d5);
             set_16_bit(temp, 1 << 6, &mut self.d6);
             set_16_bit(temp, 1 << 7, &mut self.d7);
             set_16_bit(temp, 1 << 8, &mut self.d8);
             set_16_bit(temp, 1 << 9, &mut self.d9);
             set_16_bit(temp, 1 << 10, &mut self.d10);
-            set_16_bit(temp, 1 << 11, &mut self.d0);
-            set_16_bit(temp, 1 << 12, &mut self.d1);
-            set_16_bit(temp, 1 << 13, &mut self.d2);
-            set_16_bit(temp, 1 << 14, &mut self.d3);
-            set_16_bit(temp, 1 << 15, &mut self.d4);
+            set_16_bit(temp, 1 << 11, &mut self.d11);
+            set_16_bit(temp, 1 << 12, &mut self.d12);
+            set_16_bit(temp, 1 << 13, &mut self.d13);
+            set_16_bit(temp, 1 << 14, &mut self.d14);
+            set_16_bit(temp, 1 << 15, &mut self.d15);
             self.write();
         });
         self.dcx.set_low().unwrap();
