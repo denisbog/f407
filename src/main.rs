@@ -50,7 +50,7 @@ fn main() -> ! {
         resx: gpioe.pe4.into_push_pull_output(),
         delay: &mut delay,
     };
-    lcd.reset();
+    // lcd.reset();
     let mut controller = lcd_ili9341::Controller::new(lcd);
     // //reset start
     //
@@ -58,49 +58,44 @@ fn main() -> ! {
     defmt::println!("reset");
     let mut delay = dp.TIM2.delay_us(&mut rcc);
     // //TODO: check what reset is doing
-    let mut reset = gpioe.pe3.into_push_pull_output();
-
-    reset.set_low();
-
-    delay.delay_us(10);
-    reset.set_high();
-    delay.delay_ms(5);
+    // let mut reset = gpioe.pe3.into_push_pull_output();
+    //
+    // reset.set_low();
+    //
+    // delay.delay_us(10);
+    // reset.set_high();
+    // delay.delay_ms(5);
     //reset end
 
     let mut led = gpioa.pa6.into_push_pull_output(); // just for notification, off when writing
                                                      // to LCD
     led.set_high();
     // delay.delay(5.secs());
-    delay.delay_ms(5);
-    controller.software_reset();
-    delay.delay_ms(120);
+    // delay.delay_ms(5);
+    // controller.software_reset();
+    // delay.delay_ms(120);
 
-    controller.sleep_out();
-    delay.delay_ms(100);
-
-    controller.display(false);
-    delay.delay_ms(5);
+    // controller.sleep_out();
+    // delay.delay_ms(100);
+    // controller.display(false);
+    // delay.delay_ms(5);
 
     // delay.delay(5.secs());
-
     controller.display(true);
-    delay.delay_ms(5);
+    // delay.delay_ms(5);
 
     // delay.delay(5.secs());
 
     controller.pixel_format_set(PixelFormat::bit16());
-    delay.delay_ms(5);
     controller.sleep_out();
-    delay.delay_ms(5);
-    controller.column_address_set(0u16, 0u16);
-    delay.delay_ms(5);
-    controller.page_address_set(0u16, 0u16);
+    controller.column_address_set(0, 0);
+    controller.page_address_set(0, 0);
 
-    delay.delay_ms(5);
     controller.memory_write_start();
-    delay.delay_ms(5);
     controller.write_memory(core::iter::repeat(0b1111110000000000).take(240 * 320));
 
+    controller.memory_write_start();
+    controller.write_memory(core::iter::repeat(0b0011110000000000).take(240 * 320));
     delay.delay_ms(50);
     led.set_low();
     delay.delay_ms(50);
