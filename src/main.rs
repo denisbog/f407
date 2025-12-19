@@ -5,7 +5,7 @@ use core::u16;
 
 use cortex_m::asm::delay;
 use defmt_rtt as _;
-use lcd_ili9341::PixelFormat;
+use lcd_ili9341::{MemoryAccessControl, PixelFormat};
 use panic_halt as _;
 use stm32f4xx_hal::{
     gpio::GpioExt,
@@ -54,11 +54,6 @@ fn main() -> ! {
         delay: &mut delay,
     };
     // lcd.reset();
-    let mut controller = lcd_ili9341::Controller::new(lcd);
-    // //reset start
-    //
-    //
-    defmt::println!("reset");
     let mut delay = dp.TIM2.delay_us(&mut rcc);
     // //TODO: check what reset is doing
     // let mut reset = gpioe.pe3.into_push_pull_output();
@@ -84,16 +79,20 @@ fn main() -> ! {
     // delay.delay_ms(5);
 
     // delay.delay(5.secs());
-    controller.display(true);
     // delay.delay_ms(5);
 
     // delay.delay(5.secs());
 
+    let mut controller = lcd_ili9341::Controller::new(lcd);
+    defmt::println!("reset");
+    controller.software_reset();
+    controller.memory_access_control(MemoryAccessControl::default());
+    // controller.memory_access_control(MemoryAccessControl::to_check());
     controller.pixel_format_set(PixelFormat::bit16());
     controller.sleep_out();
-    controller.column_address_set(10, 235);
-
-    controller.page_address_set(2000, 65535 - 1);
+    controller.display(true);
+    controller.column_address_set(0, 320);
+    controller.page_address_set(0, 240);
     let pixels = 240 * 320;
 
     delay.delay_ms(50);

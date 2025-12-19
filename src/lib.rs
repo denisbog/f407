@@ -178,6 +178,7 @@ impl<
         self.csx.set_low().unwrap();
         self.rdx.set_high().unwrap();
         self.dcx.set_low().unwrap();
+        defmt::println!("write command {} {:#02x}", 0, command);
         set_bit(command, 1, &mut self.d0);
         set_bit(command, 1 << 1, &mut self.d1);
         set_bit(command, 1 << 2, &mut self.d2);
@@ -191,7 +192,14 @@ impl<
         self.dcx.set_high().unwrap();
 
         if !data.is_empty() {
-            data.iter().for_each(|&data| {
+            data.iter().enumerate().for_each(|(index, &data)| {
+                defmt::println!(
+                    "write command {} {:#04x} ({}) {:#010b}",
+                    index + 1,
+                    data,
+                    data,
+                    data
+                );
                 set_bit(data, 1, &mut self.d0);
                 set_bit(data, 1 << 1, &mut self.d1);
                 set_bit(data, 1 << 2, &mut self.d2);
