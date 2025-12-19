@@ -9,12 +9,15 @@ version = "0.1.0"
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7"
 panic-halt = "1.0"
-lcd-ili9341 = { git = "https://github.com/denisbog/rust-lcd-ili9341" }
+# lcd-ili9341 = { git = "https://github.com/denisbog/rust-lcd-ili9341" }
 semihosting = "0.1.20"
 defmt = "1.0"
 defmt-rtt = "1.0"
 # Panic behaviour, see https://crates.io/keywords/panic-impl for alternatives
 panic-probe = { version = "1.0", features = ["print-defmt"] }
+ili9341 = "0.6.0"
+display-interface = "0.5.0"
+embedded-graphics = "0.8.1"
 
 [dependencies.stm32f4xx-hal]
 version = "0.23.0"
