@@ -22,10 +22,17 @@ use cortex_m_rt::entry;
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().unwrap();
-    let mut rcc = dp
-        .RCC
-        .freeze(Config::hse(8.MHz()).sysclk(48.MHz()).pclk1(8.MHz()));
-
+    let mut rcc = dp.RCC.freeze(Config::hsi().sysclk(48.MHz()).pclk1(8.MHz()));
+    // let mut rcc = dp
+    //     .RCC
+    //     .freeze(Config::hse(8.MHz()).sysclk(48.MHz()).pclk1(8.MHz()));
+    // let mut rcc = dp.RCC.freeze(
+    //     Config::hse(8.MHz())
+    //         .sysclk(168.MHz())
+    //         .pclk1(8.MHz())
+    //         .pclk2(8.MHz()),
+    // );
+    defmt::info!("PCLK2 {}", rcc.clocks.pclk2().raw());
     let cp = cortex_m::peripheral::Peripherals::take().unwrap();
     let dwt = cp.DWT.constrain(cp.DCB, &rcc.clocks);
     let mut local_timer = dwt.delay();
@@ -85,7 +92,8 @@ fn main() -> ! {
     let mut sensor = gpioa.pa8.into_open_drain_output().internal_pull_up(true);
     sensor.set_high();
     let tx_pin = gpioa.pa9;
-    let mut tx = dp.USART1.tx(tx_pin, 115200.bps(), &mut rcc).unwrap();
+
+    let mut tx = dp.USART1.tx(tx_pin, 9600.bps(), &mut rcc).unwrap();
     writeln!(tx, "waiting data.").unwrap();
 
     // Create a new character style
@@ -111,7 +119,7 @@ fn main() -> ! {
                     Rgb565::BLUE,
                 )
                 .unwrap();
-                defmt::println!("data {} {}", temp, humidity);
+                defmt::info!("data {} {}", temp, humidity);
                 let mut s: String<64> = String::new();
                 write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
                 Text::new(&s, Point::new(4, 14), style)
@@ -120,7 +128,7 @@ fn main() -> ! {
                 writeln!(tx, "{} {}", temp, humidity).unwrap();
                 controller.fill_contiguous(overwrite, buf_data).unwrap();
             } else {
-                defmt::println!("failure to read data");
+                defmt::error!("failure to read data");
                 writeln!(tx, "no data").unwrap();
             };
         });

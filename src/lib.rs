@@ -185,7 +185,7 @@ impl<
         let out = match cmd {
             display_interface::DataFormat::U8Iter(commands) => {
                 for (index, command) in commands.enumerate() {
-                    // defmt::println!("write command {} {:#02x}", index, command);
+                    defmt::debug!("write command {} {:#02x}", index, command);
                     set_bit(command, 1, &mut self.d0);
                     set_bit(command, 1 << 1, &mut self.d1);
                     set_bit(command, 1 << 2, &mut self.d2);
@@ -200,7 +200,7 @@ impl<
             }
             display_interface::DataFormat::U8(commands) => {
                 for (index, &command) in commands.iter().enumerate() {
-                    // defmt::println!("write commands {} {:#02x}", index, command);
+                    defmt::debug!("write commands {} {:#02x}", index, command);
                     set_bit(command, 1, &mut self.d0);
                     set_bit(command, 1 << 1, &mut self.d1);
                     set_bit(command, 1 << 2, &mut self.d2);
@@ -214,7 +214,7 @@ impl<
                 Ok(())
             }
             _ => {
-                defmt::println!("error sending command");
+                defmt::error!("error sending command");
                 Err(ili9341::DisplayError::BusWriteError)
             }
         };
@@ -232,13 +232,13 @@ impl<
         let out = match buf {
             display_interface::DataFormat::U8Iter(iterable) => {
                 iterable.into_iter().enumerate().for_each(|(index, data)| {
-                    // defmt::println!(
-                    //     "write data {} {:#04x} ({}) {:#010b}",
-                    //     index + 1,
-                    //     data,
-                    //     data,
-                    //     data
-                    // );
+                    defmt::debug!(
+                        "write data {} {:#04x} ({}) {:#010b}",
+                        index + 1,
+                        data,
+                        data,
+                        data
+                    );
                     set_bit(data, 1, &mut self.d0);
                     set_bit(data, 1 << 1, &mut self.d1);
                     set_bit(data, 1 << 2, &mut self.d2);
@@ -274,7 +274,7 @@ impl<
                 Ok(())
             }
             _ => {
-                defmt::println!("error sending data");
+                defmt::error!("error sending data");
                 Err(ili9341::DisplayError::BusWriteError)
             }
         };
