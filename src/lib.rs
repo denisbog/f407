@@ -1,8 +1,9 @@
 #![no_std]
+pub mod sensor;
 
 use core::convert::Infallible;
 
-use lcd_ili9341::Interface;
+use display_interface::WriteOnlyDataCommand;
 use stm32f4xx_hal::{
     hal::digital::OutputPin,
     prelude::*,
@@ -147,7 +148,7 @@ impl<
         D14: OutputPin<Error = Infallible>,
         D15: OutputPin<Error = Infallible>,
         T: Instance,
-    > Interface
+    > WriteOnlyDataCommand
     for LCD<
         'a,
         CSX,
@@ -174,80 +175,112 @@ impl<
         T,
     >
 {
-    fn write_parameters(&mut self, command: u8, data: &[u8]) {
+    fn send_commands(
+        &mut self,
+        cmd: display_interface::DataFormat<'_>,
+    ) -> Result<(), ili9341::DisplayError> {
         self.csx.set_low().unwrap();
         self.rdx.set_high().unwrap();
         self.dcx.set_low().unwrap();
-        defmt::println!("write command {} {:#02x}", 0, command);
-        set_bit(command, 1, &mut self.d0);
-        set_bit(command, 1 << 1, &mut self.d1);
-        set_bit(command, 1 << 2, &mut self.d2);
-        set_bit(command, 1 << 3, &mut self.d3);
-        set_bit(command, 1 << 4, &mut self.d4);
-        set_bit(command, 1 << 5, &mut self.d5);
-        set_bit(command, 1 << 6, &mut self.d6);
-        set_bit(command, 1 << 7, &mut self.d7);
-        self.write();
+        let out = match cmd {
+            display_interface::DataFormat::U8Iter(commands) => {
+                for (index, command) in commands.enumerate() {
+                    // defmt::println!("write command {} {:#02x}", index, command);
+                    set_bit(command, 1, &mut self.d0);
+                    set_bit(command, 1 << 1, &mut self.d1);
+                    set_bit(command, 1 << 2, &mut self.d2);
+                    set_bit(command, 1 << 3, &mut self.d3);
+                    set_bit(command, 1 << 4, &mut self.d4);
+                    set_bit(command, 1 << 5, &mut self.d5);
+                    set_bit(command, 1 << 6, &mut self.d6);
+                    set_bit(command, 1 << 7, &mut self.d7);
+                    self.write();
+                }
+                Ok(())
+            }
+            display_interface::DataFormat::U8(commands) => {
+                for (index, &command) in commands.iter().enumerate() {
+                    // defmt::println!("write commands {} {:#02x}", index, command);
+                    set_bit(command, 1, &mut self.d0);
+                    set_bit(command, 1 << 1, &mut self.d1);
+                    set_bit(command, 1 << 2, &mut self.d2);
+                    set_bit(command, 1 << 3, &mut self.d3);
+                    set_bit(command, 1 << 4, &mut self.d4);
+                    set_bit(command, 1 << 5, &mut self.d5);
+                    set_bit(command, 1 << 6, &mut self.d6);
+                    set_bit(command, 1 << 7, &mut self.d7);
+                    self.write();
+                }
+                Ok(())
+            }
+            _ => {
+                defmt::println!("error sending command");
+                Err(ili9341::DisplayError::BusWriteError)
+            }
+        };
+        self.csx.set_high().unwrap();
+        out
+    }
 
+    fn send_data(
+        &mut self,
+        buf: display_interface::DataFormat<'_>,
+    ) -> Result<(), ili9341::DisplayError> {
+        self.csx.set_low().unwrap();
+        self.rdx.set_high().unwrap();
         self.dcx.set_high().unwrap();
-
-        if !data.is_empty() {
-            data.iter().enumerate().for_each(|(index, &data)| {
-                defmt::println!(
-                    "write command {} {:#04x} ({}) {:#010b}",
-                    index + 1,
-                    data,
-                    data,
-                    data
-                );
-                set_bit(data, 1, &mut self.d0);
-                set_bit(data, 1 << 1, &mut self.d1);
-                set_bit(data, 1 << 2, &mut self.d2);
-                set_bit(data, 1 << 3, &mut self.d3);
-                set_bit(data, 1 << 4, &mut self.d4);
-                set_bit(data, 1 << 5, &mut self.d5);
-                set_bit(data, 1 << 6, &mut self.d6);
-                set_bit(data, 1 << 7, &mut self.d7);
-                self.write();
-            });
-        }
-        self.rdx.set_low().unwrap();
+        let out = match buf {
+            display_interface::DataFormat::U8Iter(iterable) => {
+                iterable.into_iter().enumerate().for_each(|(index, data)| {
+                    // defmt::println!(
+                    //     "write data {} {:#04x} ({}) {:#010b}",
+                    //     index + 1,
+                    //     data,
+                    //     data,
+                    //     data
+                    // );
+                    set_bit(data, 1, &mut self.d0);
+                    set_bit(data, 1 << 1, &mut self.d1);
+                    set_bit(data, 1 << 2, &mut self.d2);
+                    set_bit(data, 1 << 3, &mut self.d3);
+                    set_bit(data, 1 << 4, &mut self.d4);
+                    set_bit(data, 1 << 5, &mut self.d5);
+                    set_bit(data, 1 << 6, &mut self.d6);
+                    set_bit(data, 1 << 7, &mut self.d7);
+                    self.write();
+                });
+                Ok(())
+            }
+            display_interface::DataFormat::U16BEIter(iterable) => {
+                iterable.into_iter().for_each(|data| {
+                    set_16_bit(data, 1, &mut self.d0);
+                    set_16_bit(data, 1 << 1, &mut self.d1);
+                    set_16_bit(data, 1 << 2, &mut self.d2);
+                    set_16_bit(data, 1 << 3, &mut self.d3);
+                    set_16_bit(data, 1 << 4, &mut self.d4);
+                    set_16_bit(data, 1 << 5, &mut self.d5);
+                    set_16_bit(data, 1 << 6, &mut self.d6);
+                    set_16_bit(data, 1 << 7, &mut self.d7);
+                    set_16_bit(data, 1 << 8, &mut self.d8);
+                    set_16_bit(data, 1 << 9, &mut self.d9);
+                    set_16_bit(data, 1 << 10, &mut self.d10);
+                    set_16_bit(data, 1 << 11, &mut self.d11);
+                    set_16_bit(data, 1 << 12, &mut self.d12);
+                    set_16_bit(data, 1 << 13, &mut self.d13);
+                    set_16_bit(data, 1 << 14, &mut self.d14);
+                    set_16_bit(data, 1 << 15, &mut self.d15);
+                    self.write();
+                });
+                Ok(())
+            }
+            _ => {
+                defmt::println!("error sending data");
+                Err(ili9341::DisplayError::BusWriteError)
+            }
+        };
         self.csx.set_high().unwrap();
+        out
     }
-
-    fn write_memory<I>(&mut self, iterable: I)
-    where
-        I: IntoIterator<Item = u16>,
-    {
-        self.csx.set_low().unwrap();
-        self.rdx.set_high().unwrap();
-        iterable.into_iter().for_each(|data| {
-            let temp = data as u16;
-            set_16_bit(temp, 1, &mut self.d0);
-            set_16_bit(temp, 1 << 1, &mut self.d1);
-            set_16_bit(temp, 1 << 2, &mut self.d2);
-            set_16_bit(temp, 1 << 3, &mut self.d3);
-            set_16_bit(temp, 1 << 4, &mut self.d4);
-            set_16_bit(temp, 1 << 5, &mut self.d5);
-            set_16_bit(temp, 1 << 6, &mut self.d6);
-            set_16_bit(temp, 1 << 7, &mut self.d7);
-            set_16_bit(temp, 1 << 8, &mut self.d8);
-            set_16_bit(temp, 1 << 9, &mut self.d9);
-            set_16_bit(temp, 1 << 10, &mut self.d10);
-            set_16_bit(temp, 1 << 11, &mut self.d11);
-            set_16_bit(temp, 1 << 12, &mut self.d12);
-            set_16_bit(temp, 1 << 13, &mut self.d13);
-            set_16_bit(temp, 1 << 14, &mut self.d14);
-            set_16_bit(temp, 1 << 15, &mut self.d15);
-            self.write();
-        });
-        self.dcx.set_low().unwrap();
-        self.csx.set_high().unwrap();
-    }
-
-    fn read_parameters(&mut self, _command: u8, _data: &mut [u8]) {}
-
-    fn read_memory(&mut self, _data: &mut [u32]) {}
 }
 
 fn set_bit<P: OutputPin<Error = Infallible>>(command: u8, mask: u8, pin: &mut P) {

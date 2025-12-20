@@ -1,13 +1,14 @@
 #![no_main]
 #![no_std]
 
-use core::u16;
-
-use cortex_m::asm::delay;
 use defmt_rtt as _;
-use lcd_ili9341::{MemoryAccessControl, PixelFormat};
+use embedded_graphics::primitives::Rectangle;
+use f407::sensor::read_dht21;
+use heapless::String;
+use ili9341::Orientation;
 use panic_halt as _;
 use stm32f4xx_hal::{
+    dwt::DwtExt,
     gpio::GpioExt,
     pac::Peripherals,
     prelude::*,
@@ -15,21 +16,26 @@ use stm32f4xx_hal::{
     timer::TimerExt,
 };
 
+use core::fmt::Write;
 use cortex_m_rt::entry;
 
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().unwrap();
-    let mut rcc = dp.RCC.freeze(Config::hsi().sysclk(16.MHz()).pclk1(8.MHz()));
-    defmt::println!("led display");
+    let mut rcc = dp
+        .RCC
+        .freeze(Config::hse(8.MHz()).sysclk(48.MHz()).pclk1(8.MHz()));
 
-    let gpioa = dp.GPIOA.split(&mut rcc);
+    let cp = cortex_m::peripheral::Peripherals::take().unwrap();
+    let dwt = cp.DWT.constrain(cp.DCB, &rcc.clocks);
+    let mut local_timer = dwt.delay();
+
+    defmt::println!("led display");
     let gpiod = dp.GPIOD.split(&mut rcc);
     let gpioe = dp.GPIOE.split(&mut rcc);
 
     let mut delay = dp.TIM1.delay(&mut rcc);
-
-    let mut lcd = f407::LCD {
+    let lcd = f407::LCD {
         wrx: gpiod.pd5.into_push_pull_output(),
         csx: gpiod.pd7.into_push_pull_output(),
         dcx: gpiod.pd13.into_push_pull_output(),
@@ -53,73 +59,71 @@ fn main() -> ! {
         resx: gpioe.pe4.into_push_pull_output(),
         delay: &mut delay,
     };
+    defmt::println!("lcd");
     // lcd.reset();
-    let mut delay = dp.TIM2.delay_us(&mut rcc);
-    // //TODO: check what reset is doing
-    // let mut reset = gpioe.pe3.into_push_pull_output();
-    //
-    // reset.set_low();
-    //
-    // delay.delay_us(10);
-    // reset.set_high();
-    // delay.delay_ms(5);
-    //reset end
+    let reset = gpioe.pe3.into_push_pull_output();
+    let mut delay = dp.TIM3.delay_ms(&mut rcc);
+    defmt::println!("controller");
+    let mut controller = ili9341::Ili9341::new(
+        lcd,
+        reset,
+        &mut delay,
+        Orientation::Landscape,
+        ili9341::DisplaySize240x320,
+    )
+    .unwrap();
+    defmt::println!("loop");
 
-    let mut led = gpioa.pa6.into_push_pull_output(); // just for notification, off when writing
-                                                     // to LCD
-    led.set_high();
-    // delay.delay(5.secs());
-    // delay.delay_ms(5);
-    // controller.software_reset();
-    // delay.delay_ms(120);
+    use embedded_graphics::{
+        mono_font::{ascii::FONT_7X14, MonoTextStyle},
+        pixelcolor::Rgb565,
+        prelude::*,
+        text::Text,
+    };
 
-    // controller.sleep_out();
-    // delay.delay_ms(100);
-    // controller.display(false);
-    // delay.delay_ms(5);
+    let gpioa = dp.GPIOA.split(&mut rcc);
+    let mut sensor = gpioa.pa8.into_open_drain_output().internal_pull_up(true);
+    sensor.set_high();
+    let tx_pin = gpioa.pa9;
+    let mut tx = dp.USART1.tx(tx_pin, 115200.bps(), &mut rcc).unwrap();
+    writeln!(tx, "waiting data.").unwrap();
 
-    // delay.delay(5.secs());
-    // delay.delay_ms(5);
+    // Create a new character style
+    let style = MonoTextStyle::new(&FONT_7X14, Rgb565::WHITE);
+    controller.clear(Rgb565::RED).unwrap();
+    Text::new("Hello Rust! Wait a second..", Point::new(20, 30), style)
+        .draw(&mut controller)
+        .unwrap();
+    local_timer.delay_ms(1000);
+    controller.clear(Rgb565::WHITE).unwrap();
+    let overwrite = &Rectangle::new(Point::new(18, 15), Size::new(150, 20));
 
-    // delay.delay(5.secs());
-
-    let mut controller = lcd_ili9341::Controller::new(lcd);
-    defmt::println!("reset");
-    controller.software_reset();
-    controller.memory_access_control(MemoryAccessControl::default());
-    // controller.memory_access_control(MemoryAccessControl::to_check());
-    controller.pixel_format_set(PixelFormat::bit16());
-    controller.sleep_out();
-    controller.display(true);
-    controller.column_address_set(0, 320);
-    controller.page_address_set(0, 240);
-    let pixels = 240 * 320;
-
-    delay.delay_ms(50);
-    led.set_low();
-    delay.delay_ms(50);
-    led.set_high();
-    delay.delay_ms(50);
-    led.set_low();
-
-    defmt::println!("done");
-
-    defmt::println!("check {}", 0b1111100000000000 & (1));
-    // rprintln!("done");
+    use embedded_graphics_framebuf::FrameBuf;
     loop {
-        controller.memory_write_start();
-        controller.write_memory(core::iter::repeat(0b0000100000000000).take(pixels));
-
-        delay.delay_ms(4000);
-
-        controller.memory_write_start();
-        controller.write_memory(core::iter::repeat(0b0000000001100000).take(pixels));
-
-        delay.delay_ms(4000);
-
-        controller.memory_write_start();
-        controller.write_memory(core::iter::repeat(0b0000000000011111).take(pixels));
-
-        delay.delay_ms(4000);
+        cortex_m::interrupt::free(|_| {
+            let data = read_dht21(&mut sensor, rcc.clocks.sysclk().raw());
+            if let Ok((temp, humidity)) = data {
+                let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
+                let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
+                // controller.clear(Rgb565::RED).unwrap();
+                fbuf.fill_solid(
+                    &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
+                    Rgb565::BLUE,
+                )
+                .unwrap();
+                defmt::println!("data {} {}", temp, humidity);
+                let mut s: String<64> = String::new();
+                write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
+                Text::new(&s, Point::new(4, 14), style)
+                    .draw(&mut fbuf)
+                    .unwrap();
+                writeln!(tx, "{} {}", temp, humidity).unwrap();
+                controller.fill_contiguous(overwrite, buf_data).unwrap();
+            } else {
+                defmt::println!("failure to read data");
+                writeln!(tx, "no data").unwrap();
+            };
+        });
+        delay.delay_ms(2000);
     }
 }
