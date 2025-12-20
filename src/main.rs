@@ -2,6 +2,7 @@
 #![no_std]
 
 use defmt_rtt as _;
+use embedded_graphics::primitives::Rectangle;
 use f407::sensor::read_dht21;
 use heapless::String;
 use ili9341::Orientation;
@@ -21,7 +22,9 @@ use cortex_m_rt::entry;
 #[entry]
 fn main() -> ! {
     let dp = Peripherals::take().unwrap();
-    let mut rcc = dp.RCC.freeze(Config::hsi().sysclk(16.MHz()).pclk1(8.MHz()));
+    let mut rcc = dp
+        .RCC
+        .freeze(Config::hse(8.MHz()).sysclk(48.MHz()).pclk1(8.MHz()));
 
     let cp = cortex_m::peripheral::Peripherals::take().unwrap();
     let dwt = cp.DWT.constrain(cp.DCB, &rcc.clocks);
@@ -82,7 +85,7 @@ fn main() -> ! {
     let mut sensor = gpioa.pa8.into_open_drain_output().internal_pull_up(true);
     sensor.set_high();
     let tx_pin = gpioa.pa9;
-    let mut tx = dp.USART1.tx(tx_pin, 9600.bps(), &mut rcc).unwrap();
+    let mut tx = dp.USART1.tx(tx_pin, 115200.bps(), &mut rcc).unwrap();
     writeln!(tx, "waiting data.").unwrap();
 
     // Create a new character style
@@ -92,12 +95,15 @@ fn main() -> ! {
         .draw(&mut controller)
         .unwrap();
     local_timer.delay_ms(1000);
+    controller.clear(Rgb565::WHITE).unwrap();
+    let overwrite = &Rectangle::new(Point::new(18, 15), Size::new(150, 20));
 
     loop {
         cortex_m::interrupt::free(|_| {
             let data = read_dht21(&mut sensor, rcc.clocks.sysclk().raw());
             if let Ok((temp, humidity)) = data {
-                controller.clear(Rgb565::RED).unwrap();
+                // controller.clear(Rgb565::RED).unwrap();
+                controller.fill_solid(&*overwrite, Rgb565::BLUE).unwrap();
                 defmt::println!("data {} {}", temp, humidity);
                 let mut s: String<64> = String::new();
                 write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
