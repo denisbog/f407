@@ -2,6 +2,8 @@
 #![no_std]
 
 use defmt_rtt as _;
+use f407::sensor::read_dht21;
+use heapless::String;
 use ili9341::Orientation;
 use panic_halt as _;
 use stm32f4xx_hal::{
@@ -13,6 +15,7 @@ use stm32f4xx_hal::{
     timer::TimerExt,
 };
 
+use core::fmt::Write;
 use cortex_m_rt::entry;
 
 #[entry]
@@ -74,18 +77,39 @@ fn main() -> ! {
         prelude::*,
         text::Text,
     };
+
+    let gpioa = dp.GPIOA.split(&mut rcc);
+    let mut sensor = gpioa.pa8.into_open_drain_output().internal_pull_up(true);
+    sensor.set_high();
+    let tx_pin = gpioa.pa9;
+    let mut tx = dp.USART1.tx(tx_pin, 9600.bps(), &mut rcc).unwrap();
+    writeln!(tx, "waiting data.").unwrap();
+
     // Create a new character style
     let style = MonoTextStyle::new(&FONT_6X10, Rgb565::WHITE);
+    controller.clear(Rgb565::RED).unwrap();
+    Text::new("Hello Rust! Wait a second..", Point::new(20, 30), style)
+        .draw(&mut controller)
+        .unwrap();
+    local_timer.delay_ms(1000);
+
     loop {
-        controller.clear(Rgb565::RED).unwrap();
-        Text::new("Hello Rust!", Point::new(20, 30), style)
-            .draw(&mut controller)
-            .unwrap();
-        local_timer.delay_ms(1000);
-        controller.clear(Rgb565::BLUE).unwrap();
-        Text::new("Hello Again Rust!!", Point::new(20, 30), style)
-            .draw(&mut controller)
-            .unwrap();
-        local_timer.delay_ms(1000);
+        cortex_m::interrupt::free(|_| {
+            let data = read_dht21(&mut sensor, rcc.clocks.sysclk().raw());
+            if let Ok((temp, humidity)) = data {
+                controller.clear(Rgb565::RED).unwrap();
+                defmt::println!("data {} {}", temp, humidity);
+                let mut s: String<64> = String::new();
+                write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
+                Text::new(&s, Point::new(20, 30), style)
+                    .draw(&mut controller)
+                    .unwrap();
+                writeln!(tx, "{} {}", temp, humidity).unwrap();
+            } else {
+                defmt::println!("failure to read data");
+                writeln!(tx, "no data").unwrap();
+            };
+        });
+        delay.delay_ms(2000);
     }
 }

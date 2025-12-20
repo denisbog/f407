@@ -1,4 +1,5 @@
 #![no_std]
+pub mod sensor;
 
 use core::convert::Infallible;
 
