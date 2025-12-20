@@ -72,7 +72,7 @@ fn main() -> ! {
     defmt::println!("loop");
 
     use embedded_graphics::{
-        mono_font::{ascii::FONT_6X10, MonoTextStyle},
+        mono_font::{ascii::FONT_7X14, MonoTextStyle},
         pixelcolor::Rgb565,
         prelude::*,
         text::Text,
@@ -86,7 +86,7 @@ fn main() -> ! {
     writeln!(tx, "waiting data.").unwrap();
 
     // Create a new character style
-    let style = MonoTextStyle::new(&FONT_6X10, Rgb565::WHITE);
+    let style = MonoTextStyle::new(&FONT_7X14, Rgb565::WHITE);
     controller.clear(Rgb565::RED).unwrap();
     Text::new("Hello Rust! Wait a second..", Point::new(20, 30), style)
         .draw(&mut controller)
