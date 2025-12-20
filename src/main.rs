@@ -98,19 +98,27 @@ fn main() -> ! {
     controller.clear(Rgb565::WHITE).unwrap();
     let overwrite = &Rectangle::new(Point::new(18, 15), Size::new(150, 20));
 
+    use embedded_graphics_framebuf::FrameBuf;
     loop {
         cortex_m::interrupt::free(|_| {
             let data = read_dht21(&mut sensor, rcc.clocks.sysclk().raw());
             if let Ok((temp, humidity)) = data {
+                let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
+                let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
                 // controller.clear(Rgb565::RED).unwrap();
-                controller.fill_solid(&*overwrite, Rgb565::BLUE).unwrap();
+                fbuf.fill_solid(
+                    &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
+                    Rgb565::BLUE,
+                )
+                .unwrap();
                 defmt::println!("data {} {}", temp, humidity);
                 let mut s: String<64> = String::new();
                 write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
-                Text::new(&s, Point::new(20, 30), style)
-                    .draw(&mut controller)
+                Text::new(&s, Point::new(4, 14), style)
+                    .draw(&mut fbuf)
                     .unwrap();
                 writeln!(tx, "{} {}", temp, humidity).unwrap();
+                controller.fill_contiguous(overwrite, buf_data).unwrap();
             } else {
                 defmt::println!("failure to read data");
                 writeln!(tx, "no data").unwrap();
