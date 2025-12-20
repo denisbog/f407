@@ -1,13 +1,8 @@
 #![no_main]
 #![no_std]
 
-use cortex_m::asm;
 use defmt_rtt as _;
-use embedded_graphics::draw_target::DrawTarget;
-use embedded_graphics::pixelcolor::Rgb565;
-use embedded_graphics::prelude::RgbColor;
 use ili9341::Orientation;
-// use lcd_ili9341::PixelFormat;
 use panic_halt as _;
 use stm32f4xx_hal::{
     dwt::DwtExt,
@@ -30,8 +25,6 @@ fn main() -> ! {
     let mut local_timer = dwt.delay();
 
     defmt::println!("led display");
-
-    // let gpioa = dp.GPIOA.split(&mut rcc);
     let gpiod = dp.GPIOD.split(&mut rcc);
     let gpioe = dp.GPIOE.split(&mut rcc);
 
@@ -90,7 +83,7 @@ fn main() -> ! {
             .unwrap();
         local_timer.delay_ms(1000);
         controller.clear(Rgb565::BLUE).unwrap();
-        Text::new("Hello Again Rust!", Point::new(20, 30), style)
+        Text::new("Hello Again Rust!!", Point::new(20, 30), style)
             .draw(&mut controller)
             .unwrap();
         local_timer.delay_ms(1000);
