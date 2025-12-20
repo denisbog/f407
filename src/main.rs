@@ -1,6 +1,7 @@
 #![no_main]
 #![no_std]
 
+use cortex_m::asm;
 use defmt_rtt as _;
 use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::pixelcolor::Rgb565;
@@ -72,83 +73,26 @@ fn main() -> ! {
         ili9341::DisplaySize240x320,
     )
     .unwrap();
-    controller.clear(Rgb565::BLUE).unwrap();
-    local_timer.delay_ms(1000);
-    // //reset start
-    //
-    //
-    //
-    // defmt::println!("reset");
-    // let mut delay = dp.TIM2.delay_us(&mut rcc);
-    // // //TODO: check what reset is doing
-    // let mut reset = gpioe.pe3.into_push_pull_output();
-    //
-    // reset.set_low();
-    //
-    // delay.delay_us(10);
-    // reset.set_high();
-    // delay.delay_ms(5);
-    // //reset end
-    //
-    // let mut led = gpioa.pa6.into_push_pull_output(); // just for notification, off when writing
-    // to LCD
-    // led.set_high();
-    // // delay.delay(5.secs());
-    // delay.delay_ms(5);
-    // controller.software_reset();
-    // delay.delay_ms(120);
-    //
-    // controller.sleep_out();
-    // delay.delay_ms(100);
-    //
-    // controller.display(false);
-    // delay.delay_ms(5);
-    //
-    // // delay.delay(5.secs());
-    //
-    // controller.display(true);
-    // delay.delay_ms(5);
-    //
-    // // delay.delay(5.secs());
-    //
-    // controller.pixel_format_set(PixelFormat::bit16());
-    // delay.delay_ms(5);
-    // controller.sleep_out();
-    // delay.delay_ms(5);
-    // controller.column_address_set(0u16, 0u16);
-    // delay.delay_ms(5);
-    // controller.page_address_set(0u16, 0u16);
-    //
-    // delay.delay_ms(5);
-    // controller.memory_write_start();
-    // delay.delay_ms(5);
-    // controller.write_memory(core::iter::repeat(0b1111110000000000).take(240 * 320));
-    //
-    // delay.delay_ms(50);
-    // led.set_low();
-    // delay.delay_ms(50);
-    // led.set_high();
-    // delay.delay_ms(50);
-    // led.set_low();
+    defmt::println!("loop");
 
-    // defmt::println!("done");
-    //
-    // use embedded_graphics::{
-    //     mono_font::{ascii::FONT_6X10, MonoTextStyle},
-    //     pixelcolor::Rgb565,
-    //     prelude::*,
-    //     text::Text,
-    // };
-    //
-    // // Create a new character style
-    // let style = MonoTextStyle::new(&FONT_6X10, Rgb565::BLACK);
-    //
-    // // Create a text at position (20, 30) and draw it using the previously defined style
-    // Text::new("Hello Rust!", Point::new(20, 30), style)
-    //     .draw(&mut controller)
-    //     .unwrap();
-
-    defmt::println!("done text");
-    // rprintln!("done");
-    loop {}
+    use embedded_graphics::{
+        mono_font::{ascii::FONT_6X10, MonoTextStyle},
+        pixelcolor::Rgb565,
+        prelude::*,
+        text::Text,
+    };
+    // Create a new character style
+    let style = MonoTextStyle::new(&FONT_6X10, Rgb565::WHITE);
+    loop {
+        controller.clear(Rgb565::RED).unwrap();
+        Text::new("Hello Rust!", Point::new(20, 30), style)
+            .draw(&mut controller)
+            .unwrap();
+        local_timer.delay_ms(1000);
+        controller.clear(Rgb565::BLUE).unwrap();
+        Text::new("Hello Again Rust!", Point::new(20, 30), style)
+            .draw(&mut controller)
+            .unwrap();
+        local_timer.delay_ms(1000);
+    }
 }
