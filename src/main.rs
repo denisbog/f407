@@ -3,15 +3,15 @@
 
 use cortex_m::interrupt::Mutex;
 use defmt_rtt as _;
-use display_interface_parallel_gpio::Generic16BitBus;
-use display_interface_parallel_gpio::PGPIO16BitInterface;
 use embedded_graphics::primitives::Rectangle;
 use f407::sensor::read_dht21;
 use heapless::String;
 use ili9341::Orientation;
 use panic_halt as _;
+use stm32f4xx_hal::gpio::alt::fsmc;
 use stm32f4xx_hal::{
     dwt::DwtExt,
+    fsmc_lcd::{DataPins16, FsmcLcd, LcdPins, Timing},
     gpio::{Edge, ExtiPin, GpioExt, Input, PE3},
     interrupt,
     pac::{Peripherals, TIM3},
@@ -103,53 +103,30 @@ fn main() -> ! {
         BACKLIT_CHANNEL.borrow(cs).replace(Some(ch4));
     });
 
-    // let mut delay = dp.TIM1.delay(&mut rcc);
+    // Set up timing
+    let write_timing = Timing::default().data(3).address_setup(3).bus_turnaround(0);
+    let read_timing = Timing::default().data(8).address_setup(8).bus_turnaround(0);
 
-    let lcd = PGPIO16BitInterface::new(
-        Generic16BitBus::new((
-            gpiod.pd14.into_push_pull_output(),
-            gpiod.pd15.into_push_pull_output(),
-            gpiod.pd0.into_push_pull_output(),
-            gpiod.pd1.into_push_pull_output(),
-            gpioe.pe7.into_push_pull_output(),
-            gpioe.pe8.into_push_pull_output(),
-            gpioe.pe9.into_push_pull_output(),
-            gpioe.pe10.into_push_pull_output(),
-            gpioe.pe11.into_push_pull_output(),
-            gpioe.pe12.into_push_pull_output(),
-            gpioe.pe13.into_push_pull_output(),
-            gpioe.pe14.into_push_pull_output(),
-            gpioe.pe15.into_push_pull_output(),
-            gpiod.pd8.into_push_pull_output(),
-            gpiod.pd9.into_push_pull_output(),
-            gpiod.pd10.into_push_pull_output(),
-        )),
-        gpiod.pd13.into_push_pull_output(),
-        gpiod.pd5.into_push_pull_output(),
+    let lcd_pins = LcdPins::new(
+        DataPins16::new(
+            gpiod.pd14, gpiod.pd15, gpiod.pd0, gpiod.pd1, gpioe.pe7, gpioe.pe8, gpioe.pe9,
+            gpioe.pe10, gpioe.pe11, gpioe.pe12, gpioe.pe13, gpioe.pe14, gpioe.pe15, gpiod.pd8,
+            gpiod.pd9, gpiod.pd10,
+        ),
+        fsmc::Address::from(gpiod.pd13),
+        gpiod.pd4,
+        gpiod.pd5,
+        fsmc::ChipSelect1::from(gpiod.pd7),
     );
 
-    //CS
-    gpiod.pd7.into_push_pull_output().set_low();
-    //RD
-    gpiod.pd4.into_push_pull_output().set_high();
-    // let lcd = f407::LCD {
-    //     wrx: gpiod.pd5.into_push_pull_output(),
-    //     csx: gpiod.pd7.into_push_pull_output(),
-    //     dcx: gpiod.pd13.into_push_pull_output(),
-    //     rdx: gpiod.pd4.into_push_pull_output(),
-    //     data_pin: DataPins16::new(
-    //         gpiod.pd14, gpiod.pd15, gpiod.pd0, gpiod.pd1, gpioe.pe7, gpioe.pe8, gpioe.pe9,
-    //         gpioe.pe10, gpioe.pe11, gpioe.pe12, gpioe.pe13, gpioe.pe14, gpioe.pe15, gpiod.pd8,
-    //         gpiod.pd9, gpiod.pd10,
-    //     ),
-    //     delay: &mut delay,
-    // };
+    // Initialise FSMC memory provider
+    let (_fsmc, interface) = FsmcLcd::new(dp.FSMC, lcd_pins, &read_timing, &write_timing, &mut rcc);
     defmt::println!("lcd");
     let reset = gpioe.pe5.into_push_pull_output();
     let mut delay = dp.TIM2.delay_ms(&mut rcc);
     defmt::println!("controller");
     let mut controller = ili9341::Ili9341::new(
-        lcd,
+        interface,
         reset,
         &mut delay,
         Orientation::Landscape,

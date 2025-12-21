@@ -35,6 +35,42 @@ defmt::println!(
 
 ```
 
+### display interface with
+
+```rust
+//required dependency Cargo.toml # display-interface-parallel-gpio = "0.7.0"
+
+    use display_interface_parallel_gpio::Generic16BitBus;
+    use display_interface_parallel_gpio::PGPIO16BitInterface;
+
+    let lcd = PGPIO16BitInterface::new(
+        Generic16BitBus::new((
+            gpiod.pd14.into_push_pull_output(),
+            gpiod.pd15.into_push_pull_output(),
+            gpiod.pd0.into_push_pull_output(),
+            gpiod.pd1.into_push_pull_output(),
+            gpioe.pe7.into_push_pull_output(),
+            gpioe.pe8.into_push_pull_output(),
+            gpioe.pe9.into_push_pull_output(),
+            gpioe.pe10.into_push_pull_output(),
+            gpioe.pe11.into_push_pull_output(),
+            gpioe.pe12.into_push_pull_output(),
+            gpioe.pe13.into_push_pull_output(),
+            gpioe.pe14.into_push_pull_output(),
+            gpioe.pe15.into_push_pull_output(),
+            gpiod.pd8.into_push_pull_output(),
+            gpiod.pd9.into_push_pull_output(),
+            gpiod.pd10.into_push_pull_output(),
+        )),
+        gpiod.pd13.into_push_pull_output(),
+        gpiod.pd5.into_push_pull_output(),
+    );
+    //CS
+    gpiod.pd7.into_push_pull_output().set_low();
+    //RD
+    gpiod.pd4.into_push_pull_output().set_high();
+```
+
 ```sh
 controller
 write command 0 0x1 // software reset
