@@ -1,6 +1,7 @@
 #![no_main]
 #![no_std]
 
+use cortex_m::interrupt::Mutex;
 use defmt_rtt as _;
 use embedded_graphics::primitives::Rectangle;
 use f407::sensor::read_dht21;
@@ -9,19 +10,58 @@ use ili9341::Orientation;
 use panic_halt as _;
 use stm32f4xx_hal::{
     dwt::DwtExt,
-    gpio::GpioExt,
-    pac::Peripherals,
+    gpio::{Edge, ExtiPin, GpioExt, Input, PE3},
+    interrupt,
+    pac::{Peripherals, TIM3},
     prelude::*,
     rcc::{Config, RccExt},
-    timer::TimerExt,
+    serial::SerialExt,
+    timer::{PwmChannel, TimerExt, C4},
 };
 
-use core::fmt::Write;
+use core::{
+    cell::{Cell, RefCell},
+    fmt::Write,
+};
 use cortex_m_rt::entry;
 
+type ButtonPin = PE3<Input>;
+
+static BACKLIT_BUTTON: Mutex<RefCell<Option<ButtonPin>>> = Mutex::new(RefCell::new(None));
+static BACKLIT_CHANNEL: Mutex<RefCell<Option<PwmChannel<TIM3, C4>>>> =
+    Mutex::new(RefCell::new(None));
+static BACKLIT_CURRENT_LEVEL: Mutex<Cell<u16>> = Mutex::new(Cell::new(8u16));
+
+#[interrupt]
+fn EXTI3() {
+    defmt::info!("change backlit intensity");
+    cortex_m::interrupt::free(|cs| {
+        BACKLIT_BUTTON
+            .borrow(cs)
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .clear_interrupt_pending_bit();
+        BACKLIT_CHANNEL
+            .borrow(cs)
+            .borrow_mut()
+            .as_mut()
+            .map(|backlit| {
+                let mut current_level = BACKLIT_CURRENT_LEVEL.borrow(cs).get();
+                if current_level < backlit.get_max_duty() {
+                    current_level *= 2;
+                } else {
+                    current_level = 1
+                };
+                backlit.set_duty(backlit.get_max_duty() / current_level);
+                BACKLIT_CURRENT_LEVEL.borrow(cs).replace(current_level);
+                defmt::info!("current level {} ", BACKLIT_CURRENT_LEVEL.borrow(cs).get());
+            });
+    });
+}
 #[entry]
 fn main() -> ! {
-    let dp = Peripherals::take().unwrap();
+    let mut dp = Peripherals::take().unwrap();
     let mut rcc = dp.RCC.freeze(Config::hsi().sysclk(48.MHz()).pclk1(8.MHz()));
     // let mut rcc = dp
     //     .RCC
@@ -32,7 +72,6 @@ fn main() -> ! {
     //         .pclk1(8.MHz())
     //         .pclk2(8.MHz()),
     // );
-    defmt::info!("PCLK2 {}", rcc.clocks.pclk2().raw());
     let cp = cortex_m::peripheral::Peripherals::take().unwrap();
     let dwt = cp.DWT.constrain(cp.DCB, &rcc.clocks);
     let mut local_timer = dwt.delay();
@@ -42,10 +81,25 @@ fn main() -> ! {
     let gpioe = dp.GPIOE.split(&mut rcc);
     let gpiob = dp.GPIOB.split(&mut rcc);
     let (_, (_, _, _, ch4, ..)) = dp.TIM3.pwm_us(100.micros(), &mut rcc);
-    let mut ch4 = ch4.with(gpiob.pb1);
-    let max_duty = ch4.get_max_duty();
-    ch4.set_duty(max_duty / 10);
+    let mut ch4: PwmChannel<_, _> = ch4.with(gpiob.pb1);
+    cortex_m::interrupt::free(|cs| {
+        ch4.set_duty(ch4.get_max_duty() / BACKLIT_CURRENT_LEVEL.borrow(cs).get());
+    });
     ch4.enable();
+    let mut button = gpioe.pe3.internal_pull_up(true);
+    let mut syscfg = dp.SYSCFG.constrain(&mut rcc);
+    button.make_interrupt_source(&mut syscfg);
+    button.trigger_on_edge(&mut dp.EXTI, Edge::Rising);
+    button.enable_interrupt(&mut dp.EXTI);
+
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(button.interrupt());
+    }
+
+    cortex_m::interrupt::free(|cs| {
+        BACKLIT_BUTTON.borrow(cs).replace(Some(button));
+        BACKLIT_CHANNEL.borrow(cs).replace(Some(ch4));
+    });
 
     let mut delay = dp.TIM1.delay(&mut rcc);
     let lcd = f407::LCD {
@@ -74,7 +128,7 @@ fn main() -> ! {
     };
     defmt::println!("lcd");
     // lcd.reset();
-    let reset = gpioe.pe3.into_push_pull_output();
+    let reset = gpioe.pe5.into_push_pull_output();
     let mut delay = dp.TIM2.delay_ms(&mut rcc);
     defmt::println!("controller");
     let mut controller = ili9341::Ili9341::new(
