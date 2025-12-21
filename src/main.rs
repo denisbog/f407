@@ -3,6 +3,8 @@
 
 use cortex_m::interrupt::Mutex;
 use defmt_rtt as _;
+use display_interface_parallel_gpio::Generic16BitBus;
+use display_interface_parallel_gpio::PGPIO16BitInterface;
 use embedded_graphics::primitives::Rectangle;
 use f407::sensor::read_dht21;
 use heapless::String;
@@ -101,33 +103,48 @@ fn main() -> ! {
         BACKLIT_CHANNEL.borrow(cs).replace(Some(ch4));
     });
 
-    let mut delay = dp.TIM1.delay(&mut rcc);
-    let lcd = f407::LCD {
-        wrx: gpiod.pd5.into_push_pull_output(),
-        csx: gpiod.pd7.into_push_pull_output(),
-        dcx: gpiod.pd13.into_push_pull_output(),
-        rdx: gpiod.pd4.into_push_pull_output(),
-        d0: gpiod.pd14.into_push_pull_output(),
-        d1: gpiod.pd15.into_push_pull_output(),
-        d2: gpiod.pd0.into_push_pull_output(),
-        d3: gpiod.pd1.into_push_pull_output(),
-        d4: gpioe.pe7.into_push_pull_output(),
-        d5: gpioe.pe8.into_push_pull_output(),
-        d6: gpioe.pe9.into_push_pull_output(),
-        d7: gpioe.pe10.into_push_pull_output(),
-        d8: gpioe.pe11.into_push_pull_output(),
-        d9: gpioe.pe12.into_push_pull_output(),
-        d10: gpioe.pe13.into_push_pull_output(),
-        d11: gpioe.pe14.into_push_pull_output(),
-        d12: gpioe.pe15.into_push_pull_output(),
-        d13: gpiod.pd8.into_push_pull_output(),
-        d14: gpiod.pd9.into_push_pull_output(),
-        d15: gpiod.pd10.into_push_pull_output(),
-        resx: gpioe.pe4.into_push_pull_output(),
-        delay: &mut delay,
-    };
+    // let mut delay = dp.TIM1.delay(&mut rcc);
+
+    let lcd = PGPIO16BitInterface::new(
+        Generic16BitBus::new((
+            gpiod.pd14.into_push_pull_output(),
+            gpiod.pd15.into_push_pull_output(),
+            gpiod.pd0.into_push_pull_output(),
+            gpiod.pd1.into_push_pull_output(),
+            gpioe.pe7.into_push_pull_output(),
+            gpioe.pe8.into_push_pull_output(),
+            gpioe.pe9.into_push_pull_output(),
+            gpioe.pe10.into_push_pull_output(),
+            gpioe.pe11.into_push_pull_output(),
+            gpioe.pe12.into_push_pull_output(),
+            gpioe.pe13.into_push_pull_output(),
+            gpioe.pe14.into_push_pull_output(),
+            gpioe.pe15.into_push_pull_output(),
+            gpiod.pd8.into_push_pull_output(),
+            gpiod.pd9.into_push_pull_output(),
+            gpiod.pd10.into_push_pull_output(),
+        )),
+        gpiod.pd13.into_push_pull_output(),
+        gpiod.pd5.into_push_pull_output(),
+    );
+
+    //CS
+    gpiod.pd7.into_push_pull_output().set_low();
+    //RD
+    gpiod.pd4.into_push_pull_output().set_high();
+    // let lcd = f407::LCD {
+    //     wrx: gpiod.pd5.into_push_pull_output(),
+    //     csx: gpiod.pd7.into_push_pull_output(),
+    //     dcx: gpiod.pd13.into_push_pull_output(),
+    //     rdx: gpiod.pd4.into_push_pull_output(),
+    //     data_pin: DataPins16::new(
+    //         gpiod.pd14, gpiod.pd15, gpiod.pd0, gpiod.pd1, gpioe.pe7, gpioe.pe8, gpioe.pe9,
+    //         gpioe.pe10, gpioe.pe11, gpioe.pe12, gpioe.pe13, gpioe.pe14, gpioe.pe15, gpiod.pd8,
+    //         gpiod.pd9, gpiod.pd10,
+    //     ),
+    //     delay: &mut delay,
+    // };
     defmt::println!("lcd");
-    // lcd.reset();
     let reset = gpioe.pe5.into_push_pull_output();
     let mut delay = dp.TIM2.delay_ms(&mut rcc);
     defmt::println!("controller");
