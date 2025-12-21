@@ -40,6 +40,12 @@ fn main() -> ! {
     defmt::println!("led display");
     let gpiod = dp.GPIOD.split(&mut rcc);
     let gpioe = dp.GPIOE.split(&mut rcc);
+    let gpiob = dp.GPIOB.split(&mut rcc);
+    let (_, (_, _, _, ch4, ..)) = dp.TIM3.pwm_us(100.micros(), &mut rcc);
+    let mut ch4 = ch4.with(gpiob.pb1);
+    let max_duty = ch4.get_max_duty();
+    ch4.set_duty(max_duty / 10);
+    ch4.enable();
 
     let mut delay = dp.TIM1.delay(&mut rcc);
     let lcd = f407::LCD {
@@ -69,7 +75,7 @@ fn main() -> ! {
     defmt::println!("lcd");
     // lcd.reset();
     let reset = gpioe.pe3.into_push_pull_output();
-    let mut delay = dp.TIM3.delay_ms(&mut rcc);
+    let mut delay = dp.TIM2.delay_ms(&mut rcc);
     defmt::println!("controller");
     let mut controller = ili9341::Ili9341::new(
         lcd,
@@ -132,6 +138,6 @@ fn main() -> ! {
                 writeln!(tx, "no data").unwrap();
             };
         });
-        delay.delay_ms(2000);
+        local_timer.delay_ms(2000);
     }
 }

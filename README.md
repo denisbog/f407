@@ -15,7 +15,13 @@ runner = "probe-run --chip STM32F407VGTx"
 
 ## running the commad with the library
 
-`defmt::println!("write command {} {:#02x} ({})", index + 1, data, data);`
+### log
+
+```sh
+DEFMT_LOG=warn cargo r --release
+
+defmt::println!("write command {} {:#02x} ({})", index + 1, data, data);
+```
 
 ```rust
 
@@ -82,3 +88,4 @@ write command 2 0x00 (0) 0b00000000
 write command 3 0x00 (0) 0b00000000
 write command 4 0xf0 (240) 0b11110000
 ```
+
