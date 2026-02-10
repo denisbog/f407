@@ -184,6 +184,42 @@ fn main() -> ! {
             } else {
                 defmt::error!("failure to read data");
                 writeln!(tx, "no data").unwrap();
+
+                // Create simple yellow/white blink animation
+                let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
+                let mut s: String<64> = String::new();
+                write!(s, "<no sensor data>").unwrap();
+
+                // Simple blink: 1 second yellow, 1 second white
+                for blink_state in 0..2 {
+                    let background_color = if blink_state == 0 {
+                        Rgb565::YELLOW
+                    } else {
+                        Rgb565::WHITE
+                    };
+
+                    let text_color = if blink_state == 0 {
+                        Rgb565::WHITE
+                    } else {
+                        Rgb565::BLACK
+                    };
+
+                    let blink_style = MonoTextStyle::new(&FONT_7X14, text_color);
+
+                    let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
+                    fbuf.fill_solid(
+                        &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
+                        background_color,
+                    )
+                    .unwrap();
+
+                    Text::new(&s, Point::new(4, 14), blink_style)
+                        .draw(&mut fbuf)
+                        .unwrap();
+                    controller.fill_contiguous(overwrite, buf_data).unwrap();
+
+                    local_timer.delay_ms(1000);
+                }
             };
         });
         local_timer.delay_ms(2000);
