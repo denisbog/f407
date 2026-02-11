@@ -34,6 +34,12 @@ static BACKLIT_CHANNEL: Mutex<RefCell<Option<PwmChannel<TIM3, C4>>>> =
     Mutex::new(RefCell::new(None));
 static BACKLIT_CURRENT_LEVEL: Mutex<Cell<u16>> = Mutex::new(Cell::new(8u16));
 
+// Blink state management
+static BLINK_STATE: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
+static BLINK_ENABLED: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
+static SENSOR_ERROR: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
+static MAIN_COUNTER: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
+
 #[interrupt]
 fn EXTI3() {
     defmt::info!("change backlit intensity");
@@ -44,21 +50,35 @@ fn EXTI3() {
             .as_mut()
             .unwrap()
             .clear_interrupt_pending_bit();
-        BACKLIT_CHANNEL
-            .borrow(cs)
-            .borrow_mut()
-            .as_mut()
-            .map(|backlit| {
-                let mut current_level = BACKLIT_CURRENT_LEVEL.borrow(cs).get();
-                if current_level < backlit.get_max_duty() {
-                    current_level *= 2;
-                } else {
-                    current_level = 1
-                };
-                backlit.set_duty(backlit.get_max_duty() / current_level);
-                BACKLIT_CURRENT_LEVEL.borrow(cs).replace(current_level);
-                defmt::info!("current level {} ", BACKLIT_CURRENT_LEVEL.borrow(cs).get());
-            });
+        if let Some(backlit) = BACKLIT_CHANNEL.borrow(cs).borrow_mut().as_mut() {
+            let mut current_level = BACKLIT_CURRENT_LEVEL.borrow(cs).get();
+            if current_level < backlit.get_max_duty() {
+                current_level *= 2;
+            } else {
+                current_level = 1
+            };
+            backlit.set_duty(backlit.get_max_duty() / current_level);
+            BACKLIT_CURRENT_LEVEL.borrow(cs).replace(current_level);
+            defmt::info!("current level {} ", BACKLIT_CURRENT_LEVEL.borrow(cs).get());
+        }
+    });
+}
+
+#[interrupt]
+fn TIM4() {
+    cortex_m::interrupt::free(|cs| {
+        // Clear interrupt flag
+        let timer = unsafe { &*stm32f4xx_hal::pac::TIM4::ptr() };
+        timer.sr().write(|w| w.uif().clear_bit());
+
+        // Toggle blink state every second
+        let blink_state = BLINK_STATE.borrow(cs);
+        let current = blink_state.get();
+        blink_state.set(!current);
+
+        // Increment main counter for sensor reading timing
+        let counter = MAIN_COUNTER.borrow(cs);
+        counter.set(counter.get() + 1);
     });
 }
 #[entry]
@@ -82,12 +102,22 @@ fn main() -> ! {
     let gpiod = dp.GPIOD.split(&mut rcc);
     let gpioe = dp.GPIOE.split(&mut rcc);
     let gpiob = dp.GPIOB.split(&mut rcc);
+
+    // Setup TIM3 for backlight PWM (existing)
     let (_, (_, _, _, ch4, ..)) = dp.TIM3.pwm_us(100.micros(), &mut rcc);
     let mut ch4: PwmChannel<_, _> = ch4.with(gpiob.pb1);
     cortex_m::interrupt::free(|cs| {
         ch4.set_duty(ch4.get_max_duty() / BACKLIT_CURRENT_LEVEL.borrow(cs).get());
     });
     ch4.enable();
+
+    // Setup TIM4 for 1Hz interrupt for blinking
+    let mut timer4 = dp.TIM4.counter_hz(&mut rcc);
+    timer4.start(1.Hz()).unwrap();
+    timer4.listen(stm32f4xx_hal::timer::Event::Update);
+    unsafe {
+        cortex_m::peripheral::NVIC::unmask(stm32f4xx_hal::pac::Interrupt::TIM4);
+    }
     let mut button = gpioe.pe3.internal_pull_up(true);
     let mut syscfg = dp.SYSCFG.constrain(&mut rcc);
     button.make_interrupt_source(&mut syscfg);
@@ -161,67 +191,102 @@ fn main() -> ! {
     let overwrite = &Rectangle::new(Point::new(18, 15), Size::new(150, 20));
 
     use embedded_graphics_framebuf::FrameBuf;
+
+    let mut last_blink_state = false;
+    let mut last_sensor_read_count = 0u32;
+
     loop {
-        cortex_m::interrupt::free(|_| {
-            let data = read_dht21(&mut sensor, rcc.clocks.sysclk().raw());
-            if let Ok((temp, humidity)) = data {
-                let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
-                let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
-                // controller.clear(Rgb565::RED).unwrap();
-                fbuf.fill_solid(
-                    &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
-                    Rgb565::BLUE,
-                )
-                .unwrap();
-                defmt::info!("data {} {}", temp, humidity);
-                let mut s: String<64> = String::new();
-                write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
-                Text::new(&s, Point::new(4, 14), style)
-                    .draw(&mut fbuf)
-                    .unwrap();
-                writeln!(tx, "{} {}", temp, humidity).unwrap();
-                controller.fill_contiguous(overwrite, buf_data).unwrap();
-            } else {
-                defmt::error!("failure to read data");
-                writeln!(tx, "no data").unwrap();
+        // Check if we need to read sensor (every 2 seconds based on main counter)
+        let (should_read_sensor, counter_value) = cortex_m::interrupt::free(|cs| {
+            let counter = MAIN_COUNTER.borrow(cs).get();
+            let should_read = counter - last_sensor_read_count >= 2;
+            (should_read, counter)
+        });
 
-                // Create simple yellow/white blink animation
-                let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
-                let mut s: String<64> = String::new();
-                write!(s, "<no sensor data>").unwrap();
+        if should_read_sensor {
+            last_sensor_read_count = counter_value;
 
-                // Simple blink: 1 second yellow, 1 second white
-                for blink_state in 0..2 {
-                    let background_color = if blink_state == 0 {
-                        Rgb565::YELLOW
-                    } else {
-                        Rgb565::WHITE
-                    };
+            cortex_m::interrupt::free(|_| {
+                let data = read_dht21(&mut sensor, rcc.clocks.sysclk().raw());
+                if let Ok((temp, humidity)) = data {
+                    // Sensor reading successful - disable blinking
+                    cortex_m::interrupt::free(|cs| {
+                        SENSOR_ERROR.borrow(cs).set(false);
+                        BLINK_ENABLED.borrow(cs).set(false);
+                    });
 
-                    let text_color = if blink_state == 0 {
-                        Rgb565::WHITE
-                    } else {
-                        Rgb565::BLACK
-                    };
-
-                    let blink_style = MonoTextStyle::new(&FONT_7X14, text_color);
-
+                    let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
                     let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
                     fbuf.fill_solid(
                         &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
-                        background_color,
+                        Rgb565::BLUE,
                     )
                     .unwrap();
-
-                    Text::new(&s, Point::new(4, 14), blink_style)
+                    defmt::info!("data {} {}", temp, humidity);
+                    let mut s: String<64> = String::new();
+                    write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
+                    Text::new(&s, Point::new(4, 14), style)
                         .draw(&mut fbuf)
                         .unwrap();
+                    writeln!(tx, "{} {}", temp, humidity).unwrap();
                     controller.fill_contiguous(overwrite, buf_data).unwrap();
-
-                    local_timer.delay_ms(1000);
+                } else {
+                    // Sensor error - enable blinking
+                    defmt::error!("failure to read data");
+                    writeln!(tx, "no data").unwrap();
+                    cortex_m::interrupt::free(|cs| {
+                        SENSOR_ERROR.borrow(cs).set(true);
+                        BLINK_ENABLED.borrow(cs).set(true);
+                    });
                 }
-            };
+            });
+        }
+
+        // Check if display needs update due to blinking
+        let (blink_enabled, blink_state, sensor_error) = cortex_m::interrupt::free(|cs| {
+            (
+                BLINK_ENABLED.borrow(cs).get(),
+                BLINK_STATE.borrow(cs).get(),
+                SENSOR_ERROR.borrow(cs).get(),
+            )
         });
-        local_timer.delay_ms(2000);
+
+        if blink_enabled && sensor_error && blink_state != last_blink_state {
+            last_blink_state = blink_state;
+
+            // Update display with blink effect
+            let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
+            let mut s: String<64> = String::new();
+            write!(s, "<no sensor data>").unwrap();
+
+            let background_color = if blink_state {
+                Rgb565::YELLOW
+            } else {
+                Rgb565::WHITE
+            };
+
+            let text_color = if blink_state {
+                Rgb565::WHITE
+            } else {
+                Rgb565::BLACK
+            };
+
+            let blink_style = MonoTextStyle::new(&FONT_7X14, text_color);
+
+            let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
+            fbuf.fill_solid(
+                &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
+                background_color,
+            )
+            .unwrap();
+
+            Text::new(&s, Point::new(4, 14), blink_style)
+                .draw(&mut fbuf)
+                .unwrap();
+            controller.fill_contiguous(overwrite, buf_data).unwrap();
+        }
+
+        // Small delay to prevent busy-waiting
+        local_timer.delay_ms(10);
     }
 }
