@@ -1,292 +1,155 @@
-#![no_main]
 #![no_std]
+#![no_main]
 
-use cortex_m::interrupt::Mutex;
+use defmt::*;
 use defmt_rtt as _;
-use embedded_graphics::primitives::Rectangle;
-use f407::sensor::read_dht21;
-use heapless::String;
-use ili9341::Orientation;
-use panic_halt as _;
-use stm32f4xx_hal::gpio::alt::fsmc;
-use stm32f4xx_hal::{
-    dwt::DwtExt,
-    fsmc_lcd::{DataPins16, FsmcLcd, LcdPins, Timing},
-    gpio::{Edge, ExtiPin, GpioExt, Input, PE3},
-    interrupt,
-    pac::{Peripherals, TIM3},
-    prelude::*,
-    rcc::{Config, RccExt},
-    serial::SerialExt,
-    timer::{PwmChannel, TimerExt, C4},
-};
+use embassy_executor::Spawner;
+use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::rcc::{self, Hse, HseMode, Pll, PllMul, PllPreDiv, Sysclk};
+use embassy_stm32_fsmc_display_interface::{FsmcLcd, Timing};
+use embassy_time::Instant;
+use embassy_time::{Delay, Timer};
 
-use core::{
-    cell::{Cell, RefCell},
-    fmt::Write,
-};
-use cortex_m_rt::entry;
+use ili9341::{Ili9341, Orientation};
+use panic_probe as _;
 
-type ButtonPin = PE3<Input>;
+use {defmt_rtt as _, panic_probe as _};
 
-static BACKLIT_BUTTON: Mutex<RefCell<Option<ButtonPin>>> = Mutex::new(RefCell::new(None));
-static BACKLIT_CHANNEL: Mutex<RefCell<Option<PwmChannel<TIM3, C4>>>> =
-    Mutex::new(RefCell::new(None));
-static BACKLIT_CURRENT_LEVEL: Mutex<Cell<u16>> = Mutex::new(Cell::new(8u16));
+// Display dimensions
+const DISPLAY_WIDTH: u16 = 320;
+const DISPLAY_HEIGHT: u16 = 240;
 
-// Blink state management
-static BLINK_STATE: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
-static BLINK_ENABLED: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
-static SENSOR_ERROR: Mutex<Cell<bool>> = Mutex::new(Cell::new(false));
-static MAIN_COUNTER: Mutex<Cell<u32>> = Mutex::new(Cell::new(0));
+use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 
-#[interrupt]
-fn EXTI3() {
-    defmt::info!("change backlit intensity");
-    cortex_m::interrupt::free(|cs| {
-        BACKLIT_BUTTON
-            .borrow(cs)
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .clear_interrupt_pending_bit();
-        if let Some(backlit) = BACKLIT_CHANNEL.borrow(cs).borrow_mut().as_mut() {
-            let mut current_level = BACKLIT_CURRENT_LEVEL.borrow(cs).get();
-            if current_level < backlit.get_max_duty() {
-                current_level *= 2;
-            } else {
-                current_level = 1
-            };
-            backlit.set_duty(backlit.get_max_duty() / current_level);
-            BACKLIT_CURRENT_LEVEL.borrow(cs).replace(current_level);
-            defmt::info!("current level {} ", BACKLIT_CURRENT_LEVEL.borrow(cs).get());
-        }
+/// Hardware configuration for STM32F407 + ILI9341 using FSMC 8080 interface
+///
+/// Pin mapping for 16-bit parallel 8080 interface:
+/// - PD7  -> FSMC_NE1   (Chip Select, CS)
+/// - PD4  -> FSMC_NOE   (Read Enable, RD)
+/// - PD5  -> FSMC_NWE   (Write Enable, WR)
+/// - PD13 -> FSMC_A18   (Register Select/Data-Command, RS/DC)
+/// - PD14, PD15, PD0, PD1 -> FSMC_D0-D3  (Data lines)
+/// - PE7-PE15 -> FSMC_D4-D12             (Data lines)
+/// - PD8-PD10 -> FSMC_D13-D15            (Data lines)
+/// - PB0 -> RESET (GPIO output, consumed by Ili9341 driver)
+
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    info!("=== STM32F407 ILI9341 LCD Display ===");
+    info!("Starting application...");
+
+    // Configure clocks for maximum performance
+    // STM32F407 HSE = 8MHz, target SYSCLK = 168MHz
+    let mut config = embassy_stm32::Config::default();
+    config.rcc.hse = Some(Hse {
+        freq: embassy_stm32::time::Hertz(8_000_000),
+        mode: HseMode::Oscillator,
     });
-}
-
-#[interrupt]
-fn TIM4() {
-    cortex_m::interrupt::free(|cs| {
-        // Clear interrupt flag
-        let timer = unsafe { &*stm32f4xx_hal::pac::TIM4::ptr() };
-        timer.sr().write(|w| w.uif().clear_bit());
-
-        // Toggle blink state every second
-        let blink_state = BLINK_STATE.borrow(cs);
-        let current = blink_state.get();
-        blink_state.set(!current);
-
-        // Increment main counter for sensor reading timing
-        let counter = MAIN_COUNTER.borrow(cs);
-        counter.set(counter.get() + 1);
+    config.rcc.pll_src = rcc::PllSource::HSE;
+    config.rcc.pll = Some(Pll {
+        prediv: PllPreDiv::DIV4,        // 8MHz / 4 = 2MHz
+        mul: PllMul::MUL168,            // 2MHz * 168 = 336MHz
+        divp: Some(rcc::PllPDiv::DIV2), // 336MHz / 2 = 168MHz (SYSCLK)
+        divq: Some(rcc::PllQDiv::DIV7), // 336MHz / 7 = 48MHz (USB)
+        divr: None,
     });
-}
-#[entry]
-fn main() -> ! {
-    let mut dp = Peripherals::take().unwrap();
-    let mut rcc = dp.RCC.freeze(Config::hsi().sysclk(48.MHz()).pclk1(8.MHz()));
-    // let mut rcc = dp
-    //     .RCC
-    //     .freeze(Config::hse(8.MHz()).sysclk(48.MHz()).pclk1(8.MHz()));
-    // let mut rcc = dp.RCC.freeze(
-    //     Config::hse(8.MHz())
-    //         .sysclk(168.MHz())
-    //         .pclk1(8.MHz())
-    //         .pclk2(8.MHz()),
-    // );
-    let cp = cortex_m::peripheral::Peripherals::take().unwrap();
-    let dwt = cp.DWT.constrain(cp.DCB, &rcc.clocks);
-    let mut local_timer = dwt.delay();
+    config.rcc.ahb_pre = rcc::AHBPrescaler::DIV1; // 168MHz
+    config.rcc.apb1_pre = rcc::APBPrescaler::DIV4; // 42MHz
+    config.rcc.apb2_pre = rcc::APBPrescaler::DIV2; // 84MHz
+    config.rcc.sys = Sysclk::PLL1_P;
 
-    defmt::println!("led display");
-    let gpiod = dp.GPIOD.split(&mut rcc);
-    let gpioe = dp.GPIOE.split(&mut rcc);
-    let gpiob = dp.GPIOB.split(&mut rcc);
+    // Initialize STM32 peripherals
+    let p = embassy_stm32::init(config);
 
-    // Setup TIM3 for backlight PWM (existing)
-    let (_, (_, _, _, ch4, ..)) = dp.TIM3.pwm_us(100.micros(), &mut rcc);
-    let mut ch4: PwmChannel<_, _> = ch4.with(gpiob.pb1);
-    cortex_m::interrupt::free(|cs| {
-        ch4.set_duty(ch4.get_max_duty() / BACKLIT_CURRENT_LEVEL.borrow(cs).get());
-    });
-    ch4.enable();
+    info!("System initialized at 168MHz");
 
-    // Setup TIM4 for 1Hz interrupt for blinking
-    let mut timer4 = dp.TIM4.counter_hz(&mut rcc);
-    timer4.start(1.Hz()).unwrap();
-    timer4.listen(stm32f4xx_hal::timer::Event::Update);
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(stm32f4xx_hal::pac::Interrupt::TIM4);
-    }
-    let mut button = gpioe.pe3.internal_pull_up(true);
-    let mut syscfg = dp.SYSCFG.constrain(&mut rcc);
-    button.make_interrupt_source(&mut syscfg);
-    button.trigger_on_edge(&mut dp.EXTI, Edge::Rising);
-    button.enable_interrupt(&mut dp.EXTI);
+    // Configure reset pin as GPIO output
+    let rst = Output::new(p.PB0, Level::High, Speed::High);
 
-    unsafe {
-        cortex_m::peripheral::NVIC::unmask(button.interrupt());
-    }
+    // Create delay provider
+    let mut delay = Delay;
 
-    cortex_m::interrupt::free(|cs| {
-        BACKLIT_BUTTON.borrow(cs).replace(Some(button));
-        BACKLIT_CHANNEL.borrow(cs).replace(Some(ch4));
-    });
+    info!("Reset pin configured");
 
-    // Set up timing
-    let write_timing = Timing::default().data(3).address_setup(3).bus_turnaround(0);
-    let read_timing = Timing::default().data(8).address_setup(8).bus_turnaround(0);
+    // Initialize FMC peripheral for LCD
+    info!("Initializing FSMC for 8080 interface...");
 
-    let lcd_pins = LcdPins::new(
-        DataPins16::new(
-            gpiod.pd14, gpiod.pd15, gpiod.pd0, gpiod.pd1, gpioe.pe7, gpioe.pe8, gpioe.pe9,
-            gpioe.pe10, gpioe.pe11, gpioe.pe12, gpioe.pe13, gpioe.pe14, gpioe.pe15, gpiod.pd8,
-            gpiod.pd9, gpiod.pd10,
+    let mut timing = Timing::default();
+    timing.bus_turnaround = 1;
+    timing.data = 4;
+    timing.address_hold = 0;
+    timing.address_setup = 0;
+
+    // Create FSMC LCD interface with proper pin configuration
+    // Uses Intel 8080 protocol via FSMC NOR/PSRAM Bank 1
+    let lcd_interface = FsmcLcd::new(
+        p.PD7,  // CS  (Chip Select / FSMC_NE1)
+        p.PD4,  // RD  (Read Enable / FSMC_NOE)
+        p.PD5,  // WR  (Write Enable / FSMC_NWE)
+        p.PD13, // RS  (Register Select / FSMC_A18 - controls command/data)
+        (
+            p.PD14, p.PD15, p.PD0, p.PD1, // D0-D3
+            p.PE7, p.PE8, p.PE9, p.PE10, // D4-D7
+            p.PE11, p.PE12, p.PE13, p.PE14, // D8-D11
+            p.PE15, p.PD8, p.PD9, p.PD10, // D12-D15
         ),
-        fsmc::Address::from(gpiod.pd13),
-        gpiod.pd4,
-        gpiod.pd5,
-        fsmc::ChipSelect1::from(gpiod.pd7),
+        &timing, // Read timing
+        &timing, // Write timing
     );
 
-    // Initialise FSMC memory provider
-    let (_fsmc, interface) = FsmcLcd::new(dp.FSMC, lcd_pins, &read_timing, &write_timing, &mut rcc);
-    defmt::println!("lcd");
-    let reset = gpioe.pe5.into_push_pull_output();
-    let mut delay = dp.TIM2.delay_ms(&mut rcc);
-    defmt::println!("controller");
-    let mut controller = ili9341::Ili9341::new(
-        interface,
-        reset,
+    info!("FSMC interface created");
+
+    // Initialize ILI9341 display driver
+    info!("Initializing ILI9341 display driver...");
+
+    let mut display = Ili9341::new(
+        lcd_interface,
+        rst,
         &mut delay,
         Orientation::Landscape,
         ili9341::DisplaySize240x320,
     )
-    .unwrap();
-    defmt::println!("loop");
+    .expect("Failed to initialize display");
 
-    use embedded_graphics::{
-        mono_font::{ascii::FONT_7X14, MonoTextStyle},
-        pixelcolor::Rgb565,
-        prelude::*,
-        text::Text,
-    };
+    info!("Display initialized successfully!");
+    info!("Resolution: {}x{}", DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
-    let gpioa = dp.GPIOA.split(&mut rcc);
-    let mut sensor = gpioa.pa8.into_open_drain_output().internal_pull_up(true);
-    sensor.set_high();
-    let tx_pin = gpioa.pa9;
+    // The ili9341 driver provides low-level access
+    // For drawing, you would implement a framebuffer or use the driver's methods
+    // This example demonstrates the driver is working
+    let colors = [
+        ("RED", Rgb565::RED),
+        ("GREEN", Rgb565::GREEN),
+        ("BLUE", Rgb565::BLUE),
+    ];
+    info!("Starting display loop...");
 
-    let mut tx = dp.USART1.tx(tx_pin, 9600.bps(), &mut rcc).unwrap();
-    writeln!(tx, "waiting data.").unwrap();
-
-    // Create a new character style
-    let style = MonoTextStyle::new(&FONT_7X14, Rgb565::WHITE);
-    controller.clear(Rgb565::RED).unwrap();
-    Text::new("Hello Rust! Wait a second..", Point::new(20, 30), style)
-        .draw(&mut controller)
-        .unwrap();
-    local_timer.delay_ms(1000);
-    controller.clear(Rgb565::WHITE).unwrap();
-    let overwrite = &Rectangle::new(Point::new(18, 15), Size::new(150, 20));
-
-    use embedded_graphics_framebuf::FrameBuf;
-
-    let mut last_blink_state = false;
-    let mut last_sensor_read_count = 0u32;
-
+    // Main loop - blink LED or similar to show it's running
     loop {
-        // Check if we need to read sensor (every 2 seconds based on main counter)
-        let (should_read_sensor, counter_value) = cortex_m::interrupt::free(|cs| {
-            let counter = MAIN_COUNTER.borrow(cs).get();
-            let should_read = counter - last_sensor_read_count >= 2;
-            (should_read, counter)
-        });
+        for (color_name, color) in colors.iter() {
+            // Measure how long it takes to fill the screen
+            let start = Instant::now();
 
-        if should_read_sensor {
-            last_sensor_read_count = counter_value;
+            // Fill the entire screen with the current color
+            display.clear(*color).unwrap();
 
-            cortex_m::interrupt::free(|_| {
-                let data = read_dht21(&mut sensor, rcc.clocks.sysclk().raw());
-                if let Ok((temp, humidity)) = data {
-                    // Sensor reading successful - disable blinking
-                    cortex_m::interrupt::free(|cs| {
-                        SENSOR_ERROR.borrow(cs).set(false);
-                        BLINK_ENABLED.borrow(cs).set(false);
-                    });
+            let duration = start.elapsed();
 
-                    let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
-                    let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
-                    fbuf.fill_solid(
-                        &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
-                        Rgb565::BLUE,
-                    )
-                    .unwrap();
-                    defmt::info!("data {} {}", temp, humidity);
-                    let mut s: String<64> = String::new();
-                    write!(s, "Tem {} Hum {} !!", temp, humidity).unwrap();
-                    Text::new(&s, Point::new(4, 14), style)
-                        .draw(&mut fbuf)
-                        .unwrap();
-                    writeln!(tx, "{} {}", temp, humidity).unwrap();
-                    controller.fill_contiguous(overwrite, buf_data).unwrap();
+            // Log the color and time taken
+            // 320x240 = 76,800 pixels at 16 bits per pixel = 153,600 bytes
+            info!(
+                "Filled screen with {} in {} ms ({} pixels, ~{} KB/s)",
+                color_name,
+                duration.as_millis(),
+                320 * 240,
+                if duration.as_millis() > 0 {
+                    (153600 * 1000) / (duration.as_millis() as u64 * 1024)
                 } else {
-                    // Sensor error - enable blinking
-                    defmt::error!("failure to read data");
-                    writeln!(tx, "no data").unwrap();
-                    cortex_m::interrupt::free(|cs| {
-                        SENSOR_ERROR.borrow(cs).set(true);
-                        BLINK_ENABLED.borrow(cs).set(true);
-                    });
+                    0
                 }
-            });
+            );
+            // Wait 1 second before changing to the next color
+            Timer::after_secs(1).await;
         }
-
-        // Check if display needs update due to blinking
-        let (blink_enabled, blink_state, sensor_error) = cortex_m::interrupt::free(|cs| {
-            (
-                BLINK_ENABLED.borrow(cs).get(),
-                BLINK_STATE.borrow(cs).get(),
-                SENSOR_ERROR.borrow(cs).get(),
-            )
-        });
-
-        if blink_enabled && sensor_error && blink_state != last_blink_state {
-            last_blink_state = blink_state;
-
-            // Update display with blink effect
-            let mut buf_data = [<Rgb565 as RgbColor>::WHITE; 150 * 20];
-            let mut s: String<64> = String::new();
-            write!(s, "<no sensor data>").unwrap();
-
-            let background_color = if blink_state {
-                Rgb565::YELLOW
-            } else {
-                Rgb565::WHITE
-            };
-
-            let text_color = if blink_state {
-                Rgb565::WHITE
-            } else {
-                Rgb565::BLACK
-            };
-
-            let blink_style = MonoTextStyle::new(&FONT_7X14, text_color);
-
-            let mut fbuf = FrameBuf::new(&mut buf_data, 150, 20);
-            fbuf.fill_solid(
-                &Rectangle::new(Point::new(0, 0), Size::new(150, 20)),
-                background_color,
-            )
-            .unwrap();
-
-            Text::new(&s, Point::new(4, 14), blink_style)
-                .draw(&mut fbuf)
-                .unwrap();
-            controller.fill_contiguous(overwrite, buf_data).unwrap();
-        }
-
-        // Small delay to prevent busy-waiting
-        local_timer.delay_ms(10);
     }
 }
