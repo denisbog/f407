@@ -1,7 +1,6 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 runner = ["probe-rs", "run", "--chip", "STM32F407VGTx"]
 
-
 rustflags = [
   "-C", "linker=flip-link",
   "-C", "link-arg=-Tlink.x",
@@ -11,9 +10,11 @@ rustflags = [
   "-C", "link-arg=--nmagic",
 ]
 
-
 [build]
 target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)
 
 [env]
 DEFMT_LOG = "info"
+
+[unstable]
+build-std = ["core"]
