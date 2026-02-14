@@ -1,20 +1,24 @@
 #![no_std]
 #![no_main]
 
-use core::any::Any;
-
+use cortex_m::prelude::_embedded_hal_Pwm;
+use crc::{Crc, CRC_8_NRSC_5};
 use defmt::*;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_stm32::i2c::{Config as I2cConfig, I2c};
+use embassy_futures::select::{select, Either};
+use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::rcc::{self, Hse, HseMode, Pll, PllMul, PllPreDiv, Sysclk};
-use embassy_stm32::time::Hertz;
+use embassy_stm32::time::{khz, Hertz};
+use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
+use embassy_stm32::timer::Channel;
 use embassy_stm32_fsmc_display_interface::{FsmcLcd, Timing};
 use embassy_time::Instant;
-use embassy_time::{Delay, Timer};
+use embassy_time::{Delay, Duration, Timer};
 use embedded_aht20::{Aht20, DEFAULT_I2C_ADDRESS};
 
+use embassy_stm32::i2c::{Config as I2cConfig, I2c};
 use ili9341::{Ili9341, Orientation};
 use panic_probe as _;
 
@@ -24,7 +28,10 @@ use {defmt_rtt as _, panic_probe as _};
 const DISPLAY_WIDTH: u16 = 320;
 const DISPLAY_HEIGHT: u16 = 240;
 
+use embedded_graphics::mono_font::{ascii::FONT_10X20, MonoTextStyle};
+use embedded_graphics::text::Text;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
+use heapless::String;
 
 /// Hardware configuration for STM32F407 + ILI9341 using FSMC 8080 interface
 ///
@@ -70,6 +77,36 @@ async fn main(_spawner: Spawner) {
 
     // Configure reset pin as GPIO output
     let rst = Output::new(p.PB0, Level::High, Speed::High);
+
+    // Configure PWM for backlight control on PB1 (TIM3_CH4)
+    let pwm_pin = PwmPin::new(p.PB1, embassy_stm32::gpio::OutputType::PushPull);
+    let mut pwm = SimplePwm::new(
+        p.TIM3,
+        None,          // CH1 not used
+        None,          // CH2 not used
+        None,          // CH3 not used
+        Some(pwm_pin), // CH4 on PB1
+        khz(20),       // 20kHz PWM frequency (good for LED, no flicker)
+        Default::default(),
+    );
+    let backlight_channel = Channel::Ch4;
+
+    // 5 intensity levels: 0%, 25%, 50%, 75%, 100%
+    const INTENSITY_LEVELS: [u16; 5] = [0, 25, 50, 75, 100];
+    let mut current_level_idx: usize = 4; // Start at 100%
+    pwm.set_duty(
+        backlight_channel,
+        pwm.get_max_duty() * INTENSITY_LEVELS[current_level_idx] as u32 / 100,
+    );
+    pwm.enable(backlight_channel);
+    info!(
+        "Backlight PWM on PB1 (TIM3_CH4) configured at 20kHz, starting at {}%",
+        INTENSITY_LEVELS[current_level_idx]
+    );
+
+    // Configure button input on PE3 with pull-up and external interrupt
+    let mut button = ExtiInput::new(p.PE3, p.EXTI3, Pull::Up);
+    info!("Button configured on PE3 with EXTI interrupt");
 
     // Create delay provider
     let mut delay = Delay;
@@ -134,54 +171,127 @@ async fn main(_spawner: Spawner) {
         Aht20::new(i2c, DEFAULT_I2C_ADDRESS, Delay).expect("Failed to initialize AHT20 sensor");
     info!("AHT20 sensor initialized!");
 
-    // The ili9341 driver provides low-level access
-    // For drawing, you would implement a framebuffer or use the driver's methods
-    // This example demonstrates the driver is working
-    let colors = [
-        ("RED", Rgb565::RED),
-        ("GREEN", Rgb565::GREEN),
-        ("BLUE", Rgb565::BLUE),
-    ];
+    // Create text style
+    let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
+    let bg_color = Rgb565::BLACK;
+
+    // Clear screen once
+    display.clear(bg_color).unwrap();
+
     info!("Starting display loop...");
 
-    // Main loop - display colors and read sensor
+    // Main loop - read sensor and display on screen
+    let mut last_sensor_read = Instant::now();
+    let sensor_interval = Duration::from_secs(2);
+    let mut temp = 0.0f32;
+    let mut humidity = 0.0f32;
+    let mut sensor_ok = false;
+
+    // Show initial display
+    display.clear(bg_color).unwrap();
+    Text::new("Initializing...", Point::new(20, 100), text_style)
+        .draw(&mut display)
+        .unwrap();
+
+    // Flag to trigger display update
+    let mut need_display_update = true;
+
     loop {
-        // Read AHT20 sensor data
-        match sensor.measure() {
-            Ok(measurement) => {
-                let temp = measurement.temperature.celcius();
-                let humidity = measurement.relative_humidity;
-                info!("AHT20: Temperature = {}°C, Humidity = {}%", temp, humidity);
+        // Update display if needed (initial draw or after button press/sensor read)
+        if need_display_update {
+            need_display_update = false;
+            display.clear(bg_color).unwrap();
+
+            let mut temp_str: String<32> = String::new();
+            if sensor_ok {
+                core::fmt::Write::write_fmt(&mut temp_str, format_args!("Temp: {:.1} C", temp))
+                    .unwrap();
+            } else {
+                temp_str.push_str("Temp: --").unwrap();
             }
-            Err(_e) => {
-                error!("AHT20 read error");
+            Text::new(&temp_str, Point::new(20, 100), text_style)
+                .draw(&mut display)
+                .unwrap();
+
+            let mut hum_str: String<32> = String::new();
+            if sensor_ok {
+                core::fmt::Write::write_fmt(
+                    &mut hum_str,
+                    format_args!("Humidity: {:.1} %", humidity),
+                )
+                .unwrap();
+            } else {
+                hum_str.push_str("Humidity: --").unwrap();
             }
+            Text::new(&hum_str, Point::new(20, 140), text_style)
+                .draw(&mut display)
+                .unwrap();
+
+            let mut bl_str: String<32> = String::new();
+            core::fmt::Write::write_fmt(
+                &mut bl_str,
+                format_args!("Backlight: {}%", INTENSITY_LEVELS[current_level_idx]),
+            )
+            .unwrap();
+            Text::new(&bl_str, Point::new(20, 180), text_style)
+                .draw(&mut display)
+                .unwrap();
         }
 
-        for (color_name, color) in colors.iter() {
-            // Measure how long it takes to fill the screen
-            let start = Instant::now();
+        // Wait for either button press (interrupt) or timer tick
+        let button_fut = button.wait_for_falling_edge();
+        let timer_fut = Timer::after_millis(100);
 
-            // Fill the entire screen with the current color
-            display.clear(*color).unwrap();
+        match select(button_fut, timer_fut).await {
+            Either::First(_) => {
+                // Button pressed - interrupt triggered on falling edge
+                info!("Button interrupt triggered!");
 
-            let duration = start.elapsed();
+                // Cycle to next intensity level
+                current_level_idx = (current_level_idx + 1) % INTENSITY_LEVELS.len();
+                let duty = pwm.get_max_duty() * INTENSITY_LEVELS[current_level_idx] as u32 / 100;
+                pwm.set_duty(backlight_channel, duty);
+                info!(
+                    "Button pressed - backlight intensity: {}%",
+                    INTENSITY_LEVELS[current_level_idx]
+                );
 
-            // Log the color and time taken
-            // 320x240 = 76,800 pixels at 16 bits per pixel = 153,600 bytes
-            info!(
-                "Filled screen with {} in {} ms ({} pixels, ~{} KB/s)",
-                color_name,
-                duration.as_millis(),
-                320 * 240,
-                if duration.as_millis() > 0 {
-                    (153600 * 1000) / (duration.as_millis() as u64 * 1024)
-                } else {
-                    0
+                // Trigger display update
+                need_display_update = true;
+
+                // Debounce delay
+                Timer::after_millis(200).await;
+            }
+            Either::Second(_) => {
+                // Timer tick - check if we need to read sensor
+                if last_sensor_read.elapsed() >= sensor_interval {
+                    last_sensor_read = Instant::now();
+
+                    match sensor.measure_crc(|data: &[u8], crc: u8| {
+                        debug!("data: {}", data);
+                        debug!("crc: {}", crc);
+                        let crc_d = Crc::<u8>::new(&CRC_8_NRSC_5);
+                        let mut digest = crc_d.digest();
+                        digest.update(data);
+                        if digest.finalize() != crc {
+                            warn!("crc failed");
+                        }
+                        Ok(())
+                    }) {
+                        Ok(measurement) => {
+                            temp = measurement.temperature.celsius();
+                            humidity = measurement.relative_humidity;
+                            sensor_ok = true;
+                            info!("AHT20: Temperature = {}°C, Humidity = {}%", temp, humidity);
+                            need_display_update = true;
+                        }
+                        Err(_e) => {
+                            error!("AHT20 read error");
+                            sensor_ok = false;
+                        }
+                    }
                 }
-            );
-            // Wait 1 second before changing to the next color
-            Timer::after_secs(1).await;
+            }
         }
     }
 }
