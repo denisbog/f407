@@ -13,6 +13,7 @@ use embassy_stm32::rcc::{self, Hse, HseMode, Pll, PllMul, PllPreDiv, Sysclk};
 use embassy_stm32::time::{khz, Hertz};
 use embassy_stm32::timer::simple_pwm::{PwmPin, SimplePwm};
 use embassy_stm32::timer::Channel;
+use embassy_stm32::{bind_interrupts, i2c, peripherals};
 use embassy_stm32_fsmc_display_interface::{FsmcLcd, Timing};
 use embassy_time::Instant;
 use embassy_time::{Delay, Duration, Timer};
@@ -82,7 +83,10 @@ impl TextRegion {
         Ok(())
     }
 }
-
+bind_interrupts!(struct Irqs {
+    I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
+    I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
+});
 /// Hardware configuration for STM32F407 + ILI9341 using FSMC 8080 interface
 ///
 /// Pin mapping for 16-bit parallel 8080 interface:
@@ -212,13 +216,16 @@ async fn main(_spawner: Spawner) {
     i2c_config.frequency = Hertz(100_000); // 100kHz standard mode
                                            // i2c_config.sda_pullup = true; // Enable internal pull-up on SDA
                                            // i2c_config.scl_pullup = true; // Enable internal pull-up on SCL
-    let i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
+    let i2c = I2c::new(
+        p.I2C1, p.PB6, p.PB7, Irqs, p.DMA1_CH6, p.DMA1_CH0, i2c_config,
+    );
     info!("I2C1 initialized at 100kHz with internal pull-ups");
 
     // Initialize AHT20 sensor
     info!("Initializing AHT20 sensor...");
-    let mut sensor =
-        Aht20::new(i2c, DEFAULT_I2C_ADDRESS, Delay).expect("Failed to initialize AHT20 sensor");
+    let mut sensor = Aht20::new(i2c, DEFAULT_I2C_ADDRESS, Delay)
+        .await
+        .expect("Failed to initialize AHT20 sensor");
     info!("AHT20 sensor initialized!");
 
     // Create text style
@@ -232,7 +239,7 @@ async fn main(_spawner: Spawner) {
 
     // Main loop - read sensor and display on screen
     let mut last_sensor_read = Instant::now();
-    let sensor_interval = Duration::from_secs(2);
+    let sensor_interval = Duration::from_millis(200);
     let mut temp = 0.0f32;
     let mut humidity = 0.0f32;
     let mut sensor_ok = false;
@@ -343,17 +350,20 @@ async fn main(_spawner: Spawner) {
                 if last_sensor_read.elapsed() >= sensor_interval {
                     last_sensor_read = Instant::now();
 
-                    match sensor.measure_crc(|data: &[u8], crc: u8| {
-                        debug!("data: {}", data);
-                        debug!("crc: {}", crc);
-                        let crc_d = Crc::<u8>::new(&CRC_8_NRSC_5);
-                        let mut digest = crc_d.digest();
-                        digest.update(data);
-                        if digest.finalize() != crc {
-                            warn!("crc failed");
-                        }
-                        Ok(())
-                    }) {
+                    match sensor
+                        .measure_crc(|data: &[u8], crc: u8| {
+                            debug!("data: {}", data);
+                            debug!("crc: {}", crc);
+                            let crc_d = Crc::<u8>::new(&CRC_8_NRSC_5);
+                            let mut digest = crc_d.digest();
+                            digest.update(data);
+                            if digest.finalize() != crc {
+                                warn!("crc failed");
+                            }
+                            Ok(())
+                        })
+                        .await
+                    {
                         Ok(measurement) => {
                             let new_temp = measurement.temperature.celsius();
                             let new_humidity = measurement.relative_humidity;
