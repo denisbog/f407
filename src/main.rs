@@ -29,9 +29,59 @@ const DISPLAY_WIDTH: u16 = 320;
 const DISPLAY_HEIGHT: u16 = 240;
 
 use embedded_graphics::mono_font::{ascii::FONT_10X20, MonoTextStyle};
+use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::text::Text;
 use embedded_graphics::{pixelcolor::Rgb565, prelude::*};
 use heapless::String;
+
+/// Text region that can be drawn with background clearing
+struct TextRegion {
+    text: String<32>,
+    position: Point,
+    clear_box: Rectangle, // Fixed size for clearing (max possible text)
+    max_chars: usize,
+}
+
+impl TextRegion {
+    fn new(position: Point, max_chars: usize) -> Self {
+        // Calculate fixed bounding box for max text - always clear this area
+        let char_width = 10; // FONT_10X20 width
+        let char_height = 20; // FONT_10X20 height
+        let width = (max_chars * char_width) as u32;
+        let height = char_height as u32;
+        let box_position = Point::new(position.x, position.y - height as i32);
+        Self {
+            text: String::new(),
+            position,
+            clear_box: Rectangle::new(box_position, Size::new(width + 1, height + 1)),
+            max_chars,
+        }
+    }
+
+    fn set_text(&mut self, text: &str) {
+        self.text.clear();
+        // Truncate if too long
+        let to_copy = text.len().min(self.max_chars);
+        self.text.push_str(&text[..to_copy]).ok();
+    }
+
+    fn draw<D: DrawTarget<Color = Rgb565>>(
+        &self,
+        target: &mut D,
+        style: MonoTextStyle<Rgb565>,
+        bg_color: Rgb565,
+    ) -> Result<(), D::Error> {
+        // Clear the entire fixed region first (to erase any previous longer text)
+        self.clear_box
+            .into_styled(embedded_graphics::primitives::PrimitiveStyle::with_fill(
+                bg_color,
+            ))
+            .draw(target)?;
+        // Draw new text
+        Text::new(&self.text, self.position, style).draw(target)?;
+        Ok(())
+    }
+}
 
 /// Hardware configuration for STM32F407 + ILI9341 using FSMC 8080 interface
 ///
@@ -93,7 +143,7 @@ async fn main(_spawner: Spawner) {
 
     // 5 intensity levels: 0%, 25%, 50%, 75%, 100%
     const INTENSITY_LEVELS: [u16; 5] = [0, 25, 50, 75, 100];
-    let mut current_level_idx: usize = 4; // Start at 100%
+    let mut current_level_idx: usize = 1; // Start at 25%
     pwm.set_duty(
         backlight_channel,
         pwm.get_max_duty() * INTENSITY_LEVELS[current_level_idx] as u32 / 100,
@@ -175,7 +225,7 @@ async fn main(_spawner: Spawner) {
     let text_style = MonoTextStyle::new(&FONT_10X20, Rgb565::WHITE);
     let bg_color = Rgb565::BLACK;
 
-    // Clear screen once
+    // Clear screen once at startup
     display.clear(bg_color).unwrap();
 
     info!("Starting display loop...");
@@ -187,56 +237,85 @@ async fn main(_spawner: Spawner) {
     let mut humidity = 0.0f32;
     let mut sensor_ok = false;
 
-    // Show initial display
-    display.clear(bg_color).unwrap();
-    Text::new("Initializing...", Point::new(20, 100), text_style)
-        .draw(&mut display)
-        .unwrap();
+    // Create text regions for partial updates
+    let mut temp_region = TextRegion::new(Point::new(20, 100), 20);
+    let mut hum_region = TextRegion::new(Point::new(20, 140), 20);
+    let mut bl_region = TextRegion::new(Point::new(20, 180), 20);
 
-    // Flag to trigger display update
-    let mut need_display_update = true;
+    // Previous values to detect changes
+    let mut prev_temp_str: String<32> = String::new();
+    let mut prev_hum_str: String<32> = String::new();
+    let mut prev_bl_str: String<32> = String::new();
+
+    // Initial draw
+    let mut need_full_redraw = true;
 
     loop {
-        // Update display if needed (initial draw or after button press/sensor read)
-        if need_display_update {
-            need_display_update = false;
+        // Build current text strings
+        let mut temp_str: String<32> = String::new();
+        if sensor_ok {
+            core::fmt::Write::write_fmt(&mut temp_str, format_args!("Temp: {:.1} C", temp))
+                .unwrap();
+        } else {
+            temp_str.push_str("Temp: --").unwrap();
+        }
+
+        let mut hum_str: String<32> = String::new();
+        if sensor_ok {
+            core::fmt::Write::write_fmt(&mut hum_str, format_args!("Humidity: {:.1} %", humidity))
+                .unwrap();
+        } else {
+            hum_str.push_str("Humidity: --").unwrap();
+        }
+
+        let mut bl_str: String<32> = String::new();
+        core::fmt::Write::write_fmt(
+            &mut bl_str,
+            format_args!("Backlight: {}%", INTENSITY_LEVELS[current_level_idx]),
+        )
+        .unwrap();
+
+        // Check what changed and redraw only changed regions
+        if need_full_redraw {
+            // First draw or sensor state changed - clear screen and draw all
             display.clear(bg_color).unwrap();
 
-            let mut temp_str: String<32> = String::new();
-            if sensor_ok {
-                core::fmt::Write::write_fmt(&mut temp_str, format_args!("Temp: {:.1} C", temp))
+            temp_region.set_text(&temp_str);
+            temp_region
+                .draw(&mut display, text_style, bg_color)
+                .unwrap();
+
+            hum_region.set_text(&hum_str);
+            hum_region.draw(&mut display, text_style, bg_color).unwrap();
+
+            bl_region.set_text(&bl_str);
+            bl_region.draw(&mut display, text_style, bg_color).unwrap();
+
+            need_full_redraw = false;
+        } else {
+            // Only redraw changed regions
+            if temp_str != prev_temp_str {
+                temp_region.set_text(&temp_str);
+                temp_region
+                    .draw(&mut display, text_style, bg_color)
                     .unwrap();
-            } else {
-                temp_str.push_str("Temp: --").unwrap();
             }
-            Text::new(&temp_str, Point::new(20, 100), text_style)
-                .draw(&mut display)
-                .unwrap();
 
-            let mut hum_str: String<32> = String::new();
-            if sensor_ok {
-                core::fmt::Write::write_fmt(
-                    &mut hum_str,
-                    format_args!("Humidity: {:.1} %", humidity),
-                )
-                .unwrap();
-            } else {
-                hum_str.push_str("Humidity: --").unwrap();
+            if hum_str != prev_hum_str {
+                hum_region.set_text(&hum_str);
+                hum_region.draw(&mut display, text_style, bg_color).unwrap();
             }
-            Text::new(&hum_str, Point::new(20, 140), text_style)
-                .draw(&mut display)
-                .unwrap();
 
-            let mut bl_str: String<32> = String::new();
-            core::fmt::Write::write_fmt(
-                &mut bl_str,
-                format_args!("Backlight: {}%", INTENSITY_LEVELS[current_level_idx]),
-            )
-            .unwrap();
-            Text::new(&bl_str, Point::new(20, 180), text_style)
-                .draw(&mut display)
-                .unwrap();
+            if bl_str != prev_bl_str {
+                bl_region.set_text(&bl_str);
+                bl_region.draw(&mut display, text_style, bg_color).unwrap();
+            }
         }
+
+        // Save current values
+        prev_temp_str = temp_str;
+        prev_hum_str = hum_str;
+        prev_bl_str = bl_str;
 
         // Wait for either button press (interrupt) or timer tick
         let button_fut = button.wait_for_falling_edge();
@@ -255,9 +334,6 @@ async fn main(_spawner: Spawner) {
                     "Button pressed - backlight intensity: {}%",
                     INTENSITY_LEVELS[current_level_idx]
                 );
-
-                // Trigger display update
-                need_display_update = true;
 
                 // Debounce delay
                 Timer::after_millis(200).await;
@@ -279,15 +355,26 @@ async fn main(_spawner: Spawner) {
                         Ok(())
                     }) {
                         Ok(measurement) => {
-                            temp = measurement.temperature.celsius();
-                            humidity = measurement.relative_humidity;
-                            sensor_ok = true;
-                            info!("AHT20: Temperature = {}°C, Humidity = {}%", temp, humidity);
-                            need_display_update = true;
+                            let new_temp = measurement.temperature.celsius();
+                            let new_humidity = measurement.relative_humidity;
+
+                            // Check if values actually changed
+                            if (new_temp - temp).abs() > 0.05
+                                || (new_humidity - humidity).abs() > 0.5
+                                || !sensor_ok
+                            {
+                                temp = new_temp;
+                                humidity = new_humidity;
+                                sensor_ok = true;
+                                info!("AHT20: Temperature = {}°C, Humidity = {}%", temp, humidity);
+                            }
                         }
                         Err(_e) => {
-                            error!("AHT20 read error");
-                            sensor_ok = false;
+                            if sensor_ok {
+                                error!("AHT20 read error");
+                                sensor_ok = false;
+                                need_full_redraw = true;
+                            }
                         }
                     }
                 }
