@@ -1,14 +1,19 @@
 #![no_std]
 #![no_main]
 
+use core::any::Any;
+
 use defmt::*;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::i2c::{Config as I2cConfig, I2c};
 use embassy_stm32::rcc::{self, Hse, HseMode, Pll, PllMul, PllPreDiv, Sysclk};
+use embassy_stm32::time::Hertz;
 use embassy_stm32_fsmc_display_interface::{FsmcLcd, Timing};
 use embassy_time::Instant;
 use embassy_time::{Delay, Timer};
+use embedded_aht20::{Aht20, DEFAULT_I2C_ADDRESS};
 
 use ili9341::{Ili9341, Orientation};
 use panic_probe as _;
@@ -114,6 +119,21 @@ async fn main(_spawner: Spawner) {
     info!("Display initialized successfully!");
     info!("Resolution: {}x{}", DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
+    // Initialize I2C1 for AHT20 sensor
+    info!("Initializing I2C1 on PB6/PB7 for AHT20...");
+    let mut i2c_config = I2cConfig::default();
+    i2c_config.frequency = Hertz(100_000); // 100kHz standard mode
+                                           // i2c_config.sda_pullup = true; // Enable internal pull-up on SDA
+                                           // i2c_config.scl_pullup = true; // Enable internal pull-up on SCL
+    let i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
+    info!("I2C1 initialized at 100kHz with internal pull-ups");
+
+    // Initialize AHT20 sensor
+    info!("Initializing AHT20 sensor...");
+    let mut sensor =
+        Aht20::new(i2c, DEFAULT_I2C_ADDRESS, Delay).expect("Failed to initialize AHT20 sensor");
+    info!("AHT20 sensor initialized!");
+
     // The ili9341 driver provides low-level access
     // For drawing, you would implement a framebuffer or use the driver's methods
     // This example demonstrates the driver is working
@@ -124,8 +144,20 @@ async fn main(_spawner: Spawner) {
     ];
     info!("Starting display loop...");
 
-    // Main loop - blink LED or similar to show it's running
+    // Main loop - display colors and read sensor
     loop {
+        // Read AHT20 sensor data
+        match sensor.measure() {
+            Ok(measurement) => {
+                let temp = measurement.temperature.celcius();
+                let humidity = measurement.relative_humidity;
+                info!("AHT20: Temperature = {}°C, Humidity = {}%", temp, humidity);
+            }
+            Err(_e) => {
+                error!("AHT20 read error");
+            }
+        }
+
         for (color_name, color) in colors.iter() {
             // Measure how long it takes to fill the screen
             let start = Instant::now();

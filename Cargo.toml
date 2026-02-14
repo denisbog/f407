@@ -20,6 +20,10 @@ embedded-graphics = "0.8.1"
 embassy-executor = { version = "0.9.1", features = ["arch-cortex-m", "executor-thread", "defmt"] }
 embassy-time = { version = "0.5.0", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
 embassy-stm32-fsmc-display-interface = "0.2"
+embedded-aht20 = { version ="0.2", path = "../embedded-aht20" }
+heapless = "0.8"
+
+crc = "3.2"
 
 [features]
 default = ["stm32f407vg"]
