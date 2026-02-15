@@ -8,11 +8,17 @@ use embassy_executor::Spawner;
 use embassy_stm32::i2c::{Config as I2cConfig, I2c};
 use embassy_stm32::rcc::{Hse, HseMode, Pll, PllMul, PllPreDiv, Sysclk};
 use embassy_stm32::time::Hertz;
+use embassy_stm32::{bind_interrupts, i2c, peripherals};
 use embassy_time::Timer;
 use embedded_aht20::{Aht20, DEFAULT_I2C_ADDRESS};
 use panic_probe as _;
 
 use {defmt_rtt as _, panic_probe as _};
+
+bind_interrupts!(struct Irqs {
+    I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
+    I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
+});
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -43,13 +49,13 @@ async fn main(_spawner: Spawner) {
 
     let mut i2c_config = I2cConfig::default();
     i2c_config.frequency = Hertz(400_000);
-    // i2c_config.sda_pullup = true;
-    // i2c_config.scl_pullup = true;
-    let i2c = I2c::new_blocking(p.I2C1, p.PB6, p.PB7, i2c_config);
+    let i2c = I2c::new(
+        p.I2C1, p.PB6, p.PB7, Irqs, p.DMA1_CH6, p.DMA1_CH0, i2c_config,
+    );
     info!("I2C1 initialized at 100kHz with internal pull-ups");
 
     info!("Initializing AHT20 sensor...");
-    let mut sensor = match Aht20::new(i2c, DEFAULT_I2C_ADDRESS, embassy_time::Delay) {
+    let mut sensor = match Aht20::new(i2c, DEFAULT_I2C_ADDRESS, embassy_time::Delay).await {
         Ok(s) => {
             info!("AHT20 sensor initialized successfully!");
             s
@@ -67,17 +73,20 @@ async fn main(_spawner: Spawner) {
     info!("");
 
     loop {
-        match sensor.measure_crc(|data: &[u8], crc: u8| {
-            debug!("data: {}", data);
-            debug!("crc: {}", crc);
-            let crc_d = Crc::<u8>::new(&CRC_8_NRSC_5);
-            let mut digest = crc_d.digest();
-            digest.update(data);
-            if digest.finalize() != crc {
-                warn!("crc failed");
-            }
-            Ok(())
-        }) {
+        match sensor
+            .measure_crc(|data: &[u8], crc: u8| {
+                debug!("data: {}", data);
+                debug!("crc: {}", crc);
+                let crc_d = Crc::<u8>::new(&CRC_8_NRSC_5);
+                let mut digest = crc_d.digest();
+                digest.update(data);
+                if digest.finalize() != crc {
+                    warn!("crc failed");
+                }
+                Ok(())
+            })
+            .await
+        {
             Ok(measurement) => {
                 let temp = measurement.temperature.celsius();
                 let humidity = measurement.relative_humidity;
